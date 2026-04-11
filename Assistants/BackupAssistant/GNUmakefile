@@ -42,10 +42,10 @@ after-all::
 	@echo "Framework embedded in $(APP_NAME).app/Frameworks/"
 	@echo "Fixing localized resource structure..."
 	@mkdir -p $(APP_NAME).app/Resources/en.lproj
-	@# Move any flattened Localizable.strings to proper .lproj directories
-	@if [ -f $(APP_NAME).app/Resources/Localizable.strings ]; then \
-		mv $(APP_NAME).app/Resources/Localizable.strings $(APP_NAME).app/Resources/en.lproj/; \
-	fi
+	@# Remove any flattened Localizable.strings; GNUstep may have overwritten it.
+	@rm -f $(APP_NAME).app/Resources/Localizable.strings
+	@# Explicitly copy each localization from source to guarantee correct content.
+	@cp Resources/en.lproj/Localizable.strings $(APP_NAME).app/Resources/en.lproj/
 	@echo "Localized resource structure fixed"
 
 # Custom install target
