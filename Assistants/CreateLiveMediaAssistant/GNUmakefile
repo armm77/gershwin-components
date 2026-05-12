@@ -53,11 +53,12 @@ after-all::
 	@echo "Fixing localized resource structure..."
 	@mkdir -p $(APP_NAME).app/Resources/en.lproj
 	@mkdir -p $(APP_NAME).app/Resources/de.lproj
-	@# Move any flattened Localizable.strings to proper .lproj directories
-	@if [ -f $(APP_NAME).app/Resources/Localizable.strings ]; then \
-		mv $(APP_NAME).app/Resources/Localizable.strings $(APP_NAME).app/Resources/en.lproj/; \
-	fi
-	@cp Resources/de.lproj/Localizable.strings $(APP_NAME).app/Resources/de.lproj/ 2>/dev/null || true
+	@# Remove any flattened Localizable.strings; GNUstep may have overwritten it
+	@# with the last-listed language (de), so we cannot rely on its contents.
+	@rm -f $(APP_NAME).app/Resources/Localizable.strings
+	@# Explicitly copy each localization from source to guarantee correct content.
+	@cp Resources/en.lproj/Localizable.strings $(APP_NAME).app/Resources/en.lproj/
+	@cp Resources/de.lproj/Localizable.strings $(APP_NAME).app/Resources/de.lproj/
 	@echo "Localized resource structure fixed"
 
 clean::
