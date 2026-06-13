@@ -43,7 +43,7 @@ Menu_OBJC_FILES = \
 	ActionSearch.m \
 	StatusItemManager.m \
 	StatusItemsView.m \
-	StatusItemView.m \
+        StatusItemView.m \
 	WindowMonitor.m \
 	AppMenuImporter.m \
 	WindowSwitchContext.m \
@@ -53,8 +53,8 @@ Menu_OBJC_FILES = \
 # Header files
 Menu_HEADER_FILES = \
 	MenuApplication.h \
-	MenuController.h \
 	MenuProfiler.h \
+	MenuController.h \
 	MenuBarView.h \
 	CustomMenuPanel.h \
 	AppMenuWidget.h \
@@ -80,7 +80,7 @@ Menu_HEADER_FILES = \
 	StatusItemProvider.h \
 	StatusItemManager.h \
 	StatusItemsView.h \
-	StatusItemView.h \
+        StatusItemView.h \
 	WindowMonitor.h \
 	AppMenuImporter.h \
 	WindowSwitchContext.h
@@ -92,7 +92,7 @@ Menu_RESOURCE_FILES = \
 
 
 # Libraries and frameworks - configured by configure script
-Menu_TOOL_LIBS += @DBUS_LIBS@ -lX11
+Menu_TOOL_LIBS += -ldbus-1 -lX11
 Menu_GUI_LIBS += -L/System/Library/Libraries -lgnustep-gui -lgnustep-base -lobjc -ldispatch
 Menu_LDFLAGS += -Wl,--export-dynamic -L/System/Library/Libraries -Wl,-rpath,/System/Library/Libraries -Wl,--no-as-needed
 
@@ -102,12 +102,11 @@ Menu_LDFLAGS += -Wl,--export-dynamic -L/System/Library/Libraries -Wl,-rpath,/Sys
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
 	ADDITIONAL_OBJCFLAGS = -Wall -Wextra -O2 -fobjc-runtime=gnustep-2.0 -fobjc-arc -Wno-unused-parameter -D_GNU_SOURCE
-	ADDITIONAL_CPPFLAGS = @DBUS_CFLAGS@
+	ADDITIONAL_CPPFLAGS =  -I/usr/include/dbus-1.0 -I/usr/lib/aarch64-linux-gnu/dbus-1.0/include
 endif
 ifeq ($(UNAME_S),FreeBSD)
 	ADDITIONAL_OBJCFLAGS = -Wall -Wextra -O2 -fobjc-runtime=gnustep-2.0 -fobjc-arc -Wno-unused-parameter -D_BSD_SOURCE
-	ADDITIONAL_CPPFLAGS = @DBUS_CFLAGS@
-	Menu_TOOL_LIBS += -lexecinfo
+	ADDITIONAL_CPPFLAGS =  -I/usr/include/dbus-1.0 -I/usr/lib/aarch64-linux-gnu/dbus-1.0/include
 endif
 
 # Profiling: build with  make PROFILE=1  to enable CPU instrumentation.
