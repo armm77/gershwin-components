@@ -573,14 +573,31 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         return;
     }
 
+    unsigned long previousWindowId = self.currentWindowId;
     pid_t previousPID = self.currentWindowPID;
     self.currentWindowId = windowId;
     self.currentWindowPID = [MenuUtils getWindowPID:windowId];
     self.lastDisplayedPID = self.currentWindowPID;
     self.needsRedraw = YES;
 
-    /* Clear shortcuts only on cross-app switch. */
+    /* Clear shortcuts only on cross-app switch.
+     
+       Primary heuristic: PID comparison.  When both the previous and the new
+       window have a valid PID and they differ, we are clearly switching apps.
+     
+       Fallback (window-ID change + unknown PID): many GNUstep applications do
+       not set _NET_WM_PID on their X11 windows, causing getWindowPID: to
+       return 0.  In that case the primary heuristic cannot fire, and the old
+       application's shortcuts (e.g. Chrome's Cmd+W) stay registered in X11
+       even after the user has switched to a different process.  To catch this,
+       we also clean up when the window ID has changed AND the new PID is 0
+       (unknown).  This is safe because the same-app-same-PID case still works:
+       when two windows of the same app have valid PIDs, the primary heuristic
+       correctly returns NO and we keep the shortcuts. */
     BOOL switchingApp = (previousPID != 0 && self.currentWindowPID != 0 && previousPID != self.currentWindowPID);
+    if (!switchingApp && self.currentWindowPID == 0 && previousWindowId != 0 && previousWindowId != windowId) {
+        switchingApp = YES;
+    }
     if (switchingApp) {
         [[X11ShortcutManager sharedManager] unregisterNonDirectShortcuts];
     }
@@ -780,6 +797,13 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
 - (void)clearToSystemOnly
 {
+    // CRITICAL: Always unregister non-direct (app-registered) shortcuts when the menu is
+    // cleared to system-only state.  Without this, shortcuts from a previously-focused
+    // application (e.g. Chrome's Cmd+W) remain live in X11 after the user has switched to
+    // a process that doesn't trigger the loadMenu:forWindow: cleanup path (e.g. when the
+    // new window has no registered menu, or when the retry budget is exhausted).
+    [[X11ShortcutManager sharedManager] unregisterNonDirectShortcuts];
+
     [self cancelMenuRetry];
 
     /* If already in system-only state, just reset IDs. */
