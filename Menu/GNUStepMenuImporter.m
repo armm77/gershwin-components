@@ -13,6 +13,7 @@
 #import <AppKit/NSMenuItem.h>
 #import <dispatch/dispatch.h>
 #import <time.h>
+#import <X11/Xlib.h>
 
 /* Coarse DO-call throttle for full menu rebuilds.
    GWorkspace can fire updateMenuForWindow: thousands of times per second via DO.
@@ -290,6 +291,53 @@ static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServ
         }
     }
     
+    /* Check whether any of our stored GNUstep windows are children of this
+     * X11 window.  GNUstep's X11 backend creates child windows for its NSWindow
+     * content areas, so the top-level X11 window (returned by _NET_ACTIVE_WINDOW)
+     * is often the PARENT of the window ID that GNUstep's windowDevice: returns.
+     * Menu.app looks up menus by the active X11 window ID, but Eau registers
+     * menus under the child window ID.  This mismatch causes Menu.app to never
+     * find the menu for focused GNUstep windows.
+     *
+     * We fix this by walking the X11 window tree: for each stored GNUstep window,
+     * we climb up to its ancestors.  If any ancestor matches the requested
+     * windowId, we have a match and re-key the cache entries under windowId. */
+    {
+      Display *dpy = [MenuUtils sharedDisplay];
+      if (dpy) {
+        Window root = 0;
+        /* Collect stored IDs in a separate array to avoid mutation during iteration. */
+        NSArray *candidates = [self.menusByWindow allKeys];
+        for (NSNumber *storedKey in candidates) {
+          unsigned long childWin = [storedKey unsignedLongValue];
+          Window w = (Window)childWin;
+          /* Walk up the window tree: w → parent → grandparent → ... */
+          while (w != None) {
+            Window currentRoot, parent;
+            Window *children;
+            unsigned int nchildren;
+            if (XQueryTree(dpy, w, &currentRoot, &parent, &children, &nchildren)) {
+              if (children) XFree(children);
+              root = currentRoot;
+              if (parent == (Window)windowId || parent == root) {
+                /* Found direct parent match (or hit root → no match this branch). */
+                if (parent == (Window)windowId) {
+                  NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Found GNUstep window 0x%lx as child of requested window 0x%lx", childWin, windowId);
+                  self.menusByWindow[key] = self.menusByWindow[storedKey];
+                  self.clientNamesByWindow[key] = self.clientNamesByWindow[storedKey];
+                  return YES;
+                }
+                break; /* hit root, no need to continue */
+              }
+              w = parent;
+            } else {
+              break;
+            }
+          }
+        }
+      }
+    }
+
     // Proactively probe the client for this window if we don't have a menu
     // This handles the case where a new GNUstep app window appears but hasn't pushed its menu yet
     pid_t pid = [MenuUtils getWindowPID:windowId];
@@ -635,7 +683,6 @@ static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServ
     self.clientNamesByWindow[windowId] = clientName;
     self.lastMenuDataByWindow[windowId] = [menuData copy];
     self.lastMenuUpdateTimeByWindow[windowId] = @(now);
-    // NSLog(@"GNUStepMenuImporter: Stored menu for window %@ (client: %@)", windowId, clientName);
 
     // If this window is currently displayed, apply the fresh enabled/state values
     // directly to the visible menu right now.  loadMenu:forWindow: skips rebuilds
@@ -749,60 +796,107 @@ static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServ
     }
 }
 
+// Apply enabled/state from a flat array of @[title, enabled, state] triples.
+// Matches by title so the ⌘ system item at Menu.app index 0 is handled correctly.
+- (void)applyEnabledStatesFromFlatArray:(NSArray *)flatArray
+                                 toMenu:(NSMenu *)menu
+{
+    if (!flatArray || !menu) return;
+    // Build title -> entry map for fast lookup
+    NSMutableDictionary *map = [NSMutableDictionary dictionary];
+    for (id entry in flatArray) {
+        if (![entry isKindOfClass:[NSArray class]] || [entry count] < 3) continue;
+        NSString *title = [entry objectAtIndex:0];
+        if ([title isKindOfClass:[NSString class]] && [title length] > 0) {
+            map[title] = entry;
+        }
+    }
+    // Walk menu tree by title, applying enabled/state
+    [self _applyFlatArrayMap:map toMenu:menu];
+}
+
+- (void)_applyFlatArrayMap:(NSDictionary *)map toMenu:(NSMenu *)menu
+{
+    for (NSMenuItem *item in [menu itemArray]) {
+        if ([item isSeparatorItem]) continue;
+        NSString *title = [item title];
+        if (!title || [title length] == 0) continue;
+        NSArray *entry = map[title];
+        if (entry && [entry count] >= 3) {
+            NSNumber *enabled = [entry objectAtIndex:1];
+            if ([enabled isKindOfClass:[NSNumber class]]) {
+                [item setEnabled:[enabled boolValue]];
+            }
+            NSNumber *state = [entry objectAtIndex:2];
+            if ([state isKindOfClass:[NSNumber class]]) {
+                [item setState:[state integerValue]];
+            }
+        }
+        if ([item hasSubmenu]) {
+            [self _applyFlatArrayMap:map toMenu:[item submenu]];
+        }
+    }
+}
+
 - (BOOL)refreshMenuStateForWindow:(unsigned long)windowId
 {
     NSNumber *key = @(windowId);
     NSString *clientName = [self.clientNamesByWindow objectForKey:key];
     if (!clientName) {
+        NSLog(@"GNUStepMenuImporter: refreshMenuStateForWindow[%lu]: no client in cache (keys=%@)", windowId, [self.clientNamesByWindow allKeys]);
         NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: refreshMenuStateForWindow: no client for window %lu", windowId);
         return NO;
     }
 
     NSMenu *menu = [self.menusByWindow objectForKey:key];
     if (!menu) {
+        NSLog(@"GNUStepMenuImporter: refreshMenuStateForWindow[%lu]: no menu in cache (keys=%@)", windowId, [self.menusByWindow allKeys]);
         NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: refreshMenuStateForWindow: no menu for window %lu", windowId);
         return NO;
     }
 
-    /* Try to get fresh menu state from the app via validateMenuStateForWindow. */
-    NSDictionary *freshData = nil;
-    
-    // Reuse the cached connection kept by GNUStepMenuActionHandler.
+    /* Make a lightweight DO call to get fresh enabled/state values.
+       validateMenuStateForWindow: now returns a flat NSArray of
+       @[title, enabled, state] triples — no nested dictionaries, so
+       it copies over DO in a single batch instantly regardless of
+       bycopy support.  We match items by TITLE to handle the ⌘
+       system item at index 0. */
+    id rawResult = nil;
+
     NSConnection *connection = [GNUStepMenuActionHandler cachedConnectionForClient:clientName];
     if (connection && [connection isValid]) {
-        // Set a short timeout so a slow/hung client does not stall the menu bar.
         [connection setRequestTimeout:0.3];
-
         id proxy = [connection rootProxy];
         if (proxy) {
             [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
             @try {
-                freshData = [(id<GSGNUstepMenuClient>)proxy validateMenuStateForWindow:@(windowId)];
-            } @catch (NSException *e) {
-                NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: validateMenuStateForWindow: raised %@: %@",
-                            [e name], [e reason]);
-            }
+                rawResult = [(id<GSGNUstepMenuClient>)proxy validateMenuStateForWindow:@(windowId)];
+                /* Materialize proxy in one batch via plist if needed */
+                if (rawResult && [(id)rawResult isProxy]) {
+                    @try {
+                        NSError *err = nil;
+                        NSData *plist = [NSPropertyListSerialization dataWithPropertyList:rawResult format:NSPropertyListBinaryFormat_v1_0 options:0 error:&err];
+                        if (plist && !err) {
+                            rawResult = [NSPropertyListSerialization propertyListWithData:plist options:NSPropertyListImmutable format:nil error:&err];
+                        }
+                    } @catch (NSException *e) {}
+                    if (!rawResult) rawResult = [rawResult copy];
+                }
+            } @catch (NSException *e) {}
         }
     }
 
-    /* If app responded with data, apply it.  Otherwise fall back to calling [menu update]. */
-    if ([freshData isKindOfClass:[NSDictionary class]]) {
-        [self applyEnabledStatesFromData:freshData toMenu:menu depth:0];
-        // Also apply to the currently displayed menu if it is a different object.
+    NSMenu *safeMenu = [self.menusByWindow objectForKey:@(windowId)];
+    if (!safeMenu) safeMenu = menu;
+
+    if ([rawResult isKindOfClass:[NSArray class]]) {
+        [self applyEnabledStatesFromFlatArray:rawResult toMenu:safeMenu];
         AppMenuWidget *widget = self.appMenuWidget;
-        if (widget &&
-            widget.currentWindowId == windowId &&
-            widget.currentMenu != nil &&
-            widget.currentMenu != menu) {
-            [self applyEnabledStatesFromData:freshData toMenu:widget.currentMenu depth:0];
+        if (widget && widget.currentWindowId == windowId && widget.currentMenu != nil && widget.currentMenu != safeMenu) {
+            [self applyEnabledStatesFromFlatArray:rawResult toMenu:widget.currentMenu];
         }
-        NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: refreshMenuStateForWindow: applied fresh states for window %lu", windowId);
-        return YES;
     } else {
-        /* Fallback: call [menu update] to refresh delegate menu item states. */
-        NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: refreshMenuStateForWindow: app doesn't respond to validateMenuStateForWindow, calling [menu update]");
-        [menu update];
-        return YES;
+        [safeMenu update];
     }
 }
 
@@ -813,6 +907,8 @@ static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServ
                                        menuData:(bycopy NSDictionary *)menuData
                                      clientName:(bycopy NSString *)clientName
 {
+    NSLog(@"GNUStepMenuImporter: updateMenuEnabledStatesForWindow called - windowId=%@", windowId);
+
     /* Throttle to 50 ms: GWorkspace fires this path thousands of times per second.
        50 ms is imperceptible to the user but cuts CPU by ~98%.  Enabled-state
        changes (Copy/Paste becoming available after text selection) are visible to

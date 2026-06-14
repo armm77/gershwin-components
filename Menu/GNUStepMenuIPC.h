@@ -34,5 +34,5 @@
 // Menu.app calls this right before opening a submenu so that item states
 // (enabled/disabled, checkmarks) are up-to-date before the user sees them.
 // Must respond promptly (< 300 ms).
-- (bycopy NSDictionary *)validateMenuStateForWindow:(NSNumber *)windowId;
+- (bycopy id)validateMenuStateForWindow:(NSNumber *)windowId;
 @end

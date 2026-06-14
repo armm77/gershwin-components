@@ -699,20 +699,19 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         self.menuView = newView;
 
         [menu setDelegate:self];
+        /* GNUstep's NSMenuView posts NSMenuDidBeginTrackingNotification only
+           for the top-level trackWithEvent: call (the main menu bar view).
+           Submenu views use _trackWithEvent: which does NOT post notifications.
+           Therefore we observe the notification on the main menu itself, and
+           call refreshMenuStateForWindow: whenever the user begins interacting
+           with the menu bar.  This ensures enabled/disabled states (e.g. Copy
+           after Select All) are pulled from the app before the user opens any
+           submenu. */
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(mainMenuDidBeginTracking:)
+                                                     name:NSMenuDidBeginTrackingNotification
+                                                   object:menu];
 
-        /* Set this widget as delegate for all first-level submenus so that
-           menuWillOpen: fires when the user opens any submenu (e.g. "Edit"),
-           allowing refreshMenuStateForWindow: to pull fresh enabled/state
-           values from the app before the user sees the items.  Without this,
-           the pull path is never triggered and Copy stays greyed out after
-           Select All because the push path (updateMenuForWindow:) is blocked
-           by the _materializationTimeByWindow dedup guard. */
-        for (NSMenuItem *__menuItem in [menu itemArray]) {
-            NSMenu *__sub = [__menuItem submenu];
-            if (__sub && __sub != self.systemMenu) {
-                [__sub setDelegate:self];
-            }
-        }
 
         /* Wire up items without a target. */
         BOOL isGNUStepMenu = NO;
@@ -922,25 +921,32 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     [self populateSystemMenu];
 }
 
-- (void)menuWillOpen:(NSMenu *)menu
+/* Called via NSMenuDidBeginTrackingNotification for the main menu.
+   GNUstep's NSMenuView does not call the menuWillOpen: delegate method and
+   does not post NSMenuDidBeginTrackingNotification for submenus (they use
+   _trackWithEvent: internally).  So we observe the notification on the main
+   menu itself and refresh when the user begins interacting with the menu bar.
+
+   IMPORTANT: refreshMenuStateForWindow: makes a synchronous DO call to the
+   client app (Eau) which blocks the calling thread until the remote returns.
+   Calling it synchronously from the main thread would block NSMenuView's
+   tracking loop (submenu tracking runs in the same run loop iteration),
+   making the submenu dropdown feel sluggish or appear hung.
+   To keep the menu responsive, dispatch to a background queue so the main
+   thread can continue tracking immediately.  The DO call + materialization
+   run off the main thread; applyEnabledStatesFromData: (called internally by
+   refreshMenuStateForWindow:) dispatches back to the main thread. */
+- (void)mainMenuDidBeginTracking:(NSNotification *)note
 {
-    NSDebugLog(@"AppMenuWidget: menuWillOpen: '%@'", [menu title] ?: @"(no title)");
+    (void)note;
+    unsigned long windowId = self.currentWindowId;
 
-    /* Populate system menu on first open (delegate method may fire before
-       NSMenuDidBeginTrackingNotification in some GNUstep versions). */
-    if (menu == self.systemMenu) {
-        NSDebugLog(@"AppMenuWidget: menuWillOpen system menu, populating");
-        [self populateSystemMenu];
-        return;
-    }
-    
-    if (self.currentWindowId == 0) return;
-    if (![self.protocolManager hasMenuForWindow:self.currentWindowId]) return;
+    if (windowId == 0) return;
+    if (![self.protocolManager hasMenuForWindow:windowId]) return;
 
-    BOOL refreshed = [self.protocolManager refreshMenuStateForWindow:self.currentWindowId];
-    if (refreshed) {
-        NSDebugLLog(@"gwcomp", @"AppMenuWidget: Refreshed menu state for window 0x%lx before opening menu '%@'", self.currentWindowId, [menu title] ?: @"(no title)");
-    }
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        [self.protocolManager refreshMenuStateForWindow:windowId];
+    });
 }
 
 - (void)menuNeedsUpdate:(NSMenu *)menu

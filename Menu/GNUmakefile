@@ -43,7 +43,7 @@ Menu_OBJC_FILES = \
 	ActionSearch.m \
 	StatusItemManager.m \
 	StatusItemsView.m \
-        StatusItemView.m \
+	StatusItemView.m \
 	WindowMonitor.m \
 	AppMenuImporter.m \
 	WindowSwitchContext.m \
@@ -53,8 +53,8 @@ Menu_OBJC_FILES = \
 # Header files
 Menu_HEADER_FILES = \
 	MenuApplication.h \
-	MenuProfiler.h \
 	MenuController.h \
+	MenuProfiler.h \
 	MenuBarView.h \
 	CustomMenuPanel.h \
 	AppMenuWidget.h \
@@ -80,7 +80,7 @@ Menu_HEADER_FILES = \
 	StatusItemProvider.h \
 	StatusItemManager.h \
 	StatusItemsView.h \
-        StatusItemView.h \
+	StatusItemView.h \
 	WindowMonitor.h \
 	AppMenuImporter.h \
 	WindowSwitchContext.h
@@ -107,6 +107,7 @@ endif
 ifeq ($(UNAME_S),FreeBSD)
 	ADDITIONAL_OBJCFLAGS = -Wall -Wextra -O2 -fobjc-runtime=gnustep-2.0 -fobjc-arc -Wno-unused-parameter -D_BSD_SOURCE
 	ADDITIONAL_CPPFLAGS =  -I/usr/include/dbus-1.0 -I/usr/lib/aarch64-linux-gnu/dbus-1.0/include
+	Menu_TOOL_LIBS += -lexecinfo
 endif
 
 # Profiling: build with  make PROFILE=1  to enable CPU instrumentation.
