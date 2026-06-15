@@ -123,8 +123,10 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
     // Create a stable key based on menu item properties instead of memory address
     // This ensures cached menus work correctly when shortcuts are re-registered
     // Include tag to ensure uniqueness since many items may have same service/title
-    NSString *menuItemKey = [NSString stringWithFormat:@"%@_%@_%@_%ld", 
+    // Include objectPath so different windows (same service, different paths) get unique entries
+    NSString *menuItemKey = [NSString stringWithFormat:@"%@_%@_%@_%@_%ld", 
                             serviceName ?: @"unknown", 
+                            objectPath ?: @"unknown",
                             [menuItem title] ?: @"untitled",
                             [menuItem keyEquivalent] ?: @"none",
                             [menuItem tag]];
@@ -688,8 +690,13 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
 {
     // Check if this shortcut is already taken
     if ([self isShortcutAlreadyTaken:keycode modifier:x11_modifier]) {
-        NSDebugLog(@"X11ShortcutManager: Shortcut %@ is already taken - skipping", shortcutString);
-        return NO;
+        // Retry once — the old ungrab from a window switch may not have
+        // propagated to the X server yet.
+        XSync(_display, False);
+        if ([self isShortcutAlreadyTaken:keycode modifier:x11_modifier]) {
+            NSDebugLog(@"X11ShortcutManager: Shortcut %@ is already taken - skipping", shortcutString);
+            return NO;
+        }
     }
     
     // Try to grab the key
@@ -1090,7 +1097,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
         return;
     }
     
-    int menuItemId = [tagNumber intValue];
+    int menuItemId = [tagNumber intValue] & 0xFFFF;  // Tag encodes (modBits << 16) | itemId — extract only the item ID
     NSLog(@"X11ShortcutManager: Shortcut triggered for menu item ID=%d (service=%@, path=%@)", 
           menuItemId, serviceName, objectPath);
     
