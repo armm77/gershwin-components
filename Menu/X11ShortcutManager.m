@@ -7,6 +7,8 @@
 
 #import "X11ShortcutManager.h"
 #import "DBusConnection.h"
+#import "WindowMonitor.h"
+#import "MenuUtils.h"
 #import <Foundation/Foundation.h>
 #import <X11/Xlib.h>
 #import <X11/keysym.h>
@@ -239,11 +241,12 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
                            objectPath:objectPath
                        dbusConnection:dbusConnection];
     
-    // Additionally store the action name for protocol detection
-    // Create a stable key based on menu item properties - must be truly unique per menu item
-    // Include tag to match the format used in registerShortcut methods
-    NSString *menuItemKey = [NSString stringWithFormat:@"%@_%@_%@_%ld", 
+    // Additionally store the action name for protocol detection.
+    // The key MUST use the same format as registerShortcutForMenuItem:… above
+    // (including objectPath) so that triggerMenuActionForKey: can find it.
+    NSString *menuItemKey = [NSString stringWithFormat:@"%@_%@_%@_%@_%ld", 
                             serviceName ?: @"unknown",
+                            objectPath ?: @"unknown",
                             [menuItem title] ?: @"untitled",
                             [menuItem keyEquivalent] ?: @"none",
                             (long)[menuItem tag]];
@@ -1161,12 +1164,20 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
         NSLog(@"X11ShortcutManager: Using window action: %@ -> %@ on path: %@", 
               actionName, actualActionName, actualObjectPath);
     } else if ([actionName hasPrefix:@"unity."]) {
-        // Legacy unity actions - strip the prefix and try window path first
+        // Legacy unity actions — strip the prefix and activate on the
+        // menu bar object path (_GTK_MENUBAR_OBJECT_PATH), which hosts
+        // an org.gtk.Actions interface with Unity-style action names.
         actualActionName = [actionName substringFromIndex:6];
-        if ([objectPath containsString:@"/com/canonical/menu/"]) {
-            actualObjectPath = @"/org/appmenu/gtk/window/0";
+        // Try to get the actual menu bar path from the active window
+        unsigned long activeWindowId = [[WindowMonitor sharedMonitor] currentActiveWindow];
+        if (activeWindowId != 0) {
+            NSString *menuPath = [MenuUtils getWindowProperty:activeWindowId
+                                                   atomName:@"_GTK_MENUBAR_OBJECT_PATH"];
+            if (menuPath && [menuPath length] > 0) {
+                actualObjectPath = menuPath;
+            }
         }
-        NSLog(@"X11ShortcutManager: Using unity action: %@ -> %@ on path: %@", 
+        NSLog(@"X11ShortcutManager: Using unity action: %@ -> %@ on path: %@",
               actionName, actualActionName, actualObjectPath);
     }
     
