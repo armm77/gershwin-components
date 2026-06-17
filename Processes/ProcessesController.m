@@ -38,6 +38,30 @@
 #endif
 #endif
 
+// NSTableView subclass that draws full-row alternating backgrounds (no per-cell gaps)
+@interface ProcessTableView : NSTableView
+@end
+
+@implementation ProcessTableView
+
+- (void)drawRow:(NSInteger)row clipRect:(NSRect)clipRect
+{
+    NSRect rowRect = [self rectOfRow:row];
+
+    if ([self isRowSelected:row]) {
+        [[NSColor selectedControlColor] setFill];
+    } else if (row % 2 == 0) {
+        [[NSColor controlBackgroundColor] setFill];
+    } else {
+        [[NSColor colorWithCalibratedWhite:0.93 alpha:1.0] setFill];
+    }
+    NSRectFill(rowRect);
+
+    [super drawRow:row clipRect:clipRect];
+}
+
+@end
+
 // Helper function to get total system memory in KB
 static long getTotalSystemMemoryKB(void) {
     long totalMemory = 0;
@@ -707,6 +731,18 @@ static ProcessesController *sharedController = nil;
         [_forceQuitButton setEnabled:NO];
         if (_infoDrawer) [_infoDrawer close];
     }
+    [_processesTableView setNeedsDisplay:YES];
+}
+
+- (void)tableView:(NSTableView *)tableView willDisplayCell:(id)cell forTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row
+{
+    [cell setDrawsBackground:NO];
+
+    if ([tableView isRowSelected:row]) {
+        [cell setTextColor:[NSColor selectedTextColor]];
+    } else {
+        [cell setTextColor:[NSColor controlTextColor]];
+    }
 }
 
 - (void)tableView:(NSTableView *)tableView didClickTableColumn:(NSTableColumn *)tableColumn
@@ -785,15 +821,18 @@ static ProcessesController *sharedController = nil;
     [scrollView setHasHorizontalScroller:YES];
     [scrollView setAutohidesScrollers:YES];
     [scrollView setBorderType:NSBezelBorder];
-    
+    [scrollView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+
     // Create table view
-    _processesTableView = [[NSTableView alloc] initWithFrame:[scrollView bounds]];
+    _processesTableView = [[ProcessTableView alloc] initWithFrame:[scrollView bounds]];
     [_processesTableView setFont:[NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
     [_processesTableView setRowHeight:[_processesTableView rowHeight] - 2.0];
     [_processesTableView setDataSource:self];
     [_processesTableView setDelegate:self];
     [_processesTableView setAllowsMultipleSelection:NO];
-    
+    [_processesTableView setIntercellSpacing:NSMakeSize(0, 0)];
+    [_processesTableView setGridStyleMask:NSTableViewGridNone];
+
     NSTableColumn *pidColumn = [[NSTableColumn alloc] initWithIdentifier:@"pid"];
     [[pidColumn headerCell] setStringValue:@"PID"];
     [pidColumn setWidth:60];
