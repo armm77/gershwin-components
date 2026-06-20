@@ -1,7 +1,21 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
 TOOL_NAME = UIBridgeServer
-ADDITIONAL_LDFLAGS += -Wl,-rpath,/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu -lX11 -lXext
+
+# X11 input automation needs only core Xlib (synthetic input via XSendEvent, plus
+# the XKB client API which lives in libX11). Discover the compiler/linker flags
+# with pkg-config so this builds unchanged on both Linux and FreeBSD (where the
+# X11 headers and libraries live under /usr/local). Fall back to a plain -l flag
+# if pkg-config is unavailable.
+X11_PKGS := x11
+X11_CFLAGS := $(shell pkg-config --cflags $(X11_PKGS) 2>/dev/null)
+X11_LIBS := $(shell pkg-config --libs $(X11_PKGS) 2>/dev/null)
+ifeq ($(strip $(X11_LIBS)),)
+X11_LIBS := -lX11
+endif
+
+ADDITIONAL_INCLUDE_DIRS += $(X11_CFLAGS)
+ADDITIONAL_LDFLAGS += $(X11_LIBS)
 UIBridgeServer_OBJC_FILES = main.m X11Support.m LLDBController.m
 UIBridgeServer_LIBRARIES = gnustep-base gnustep-gui objc
 
