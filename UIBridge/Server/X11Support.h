@@ -17,4 +17,9 @@
 + (void)simulateClick:(int)button; // 1=left, 2=middle, 3=right
 + (void)simulateKeyStroke:(NSString *)keyString;
 
+// Raise + focus a window so subsequent keyboard input is delivered to it rather
+// than an occluding window. Needed because the desktop usually has overlapping
+// windows.
++ (void)activateWindow:(unsigned long)xid;
+
 @end

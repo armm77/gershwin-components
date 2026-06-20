@@ -287,6 +287,42 @@ static void SendKey(Display *d, Window w, KeyCode code,
     XSync(d, False);
 }
 
++ (void)activateWindow:(unsigned long)xid {
+    Display *d = [self display];
+    if (!d || xid == 0) return;
+    Window w = (Window)xid;
+    Window root = DefaultRootWindow(d);
+
+    // Standard EWMH request: ask the window manager to activate the window.
+    // Source indication 2 ("pager") is the value WMs honour for automation; it
+    // bypasses the focus-stealing prevention that ignores an application's own
+    // (source 1) activation requests.
+    Atom netActive = XInternAtom(d, "_NET_ACTIVE_WINDOW", False);
+    XEvent e;
+    memset(&e, 0, sizeof(e));
+    e.type = ClientMessage;
+    e.xclient.window = w;
+    e.xclient.message_type = netActive;
+    e.xclient.format = 32;
+    e.xclient.data.l[0] = 2;            // source indication: pager / automation
+    e.xclient.data.l[1] = CurrentTime;
+    XSendEvent(d, root, False, SubstructureRedirectMask | SubstructureNotifyMask, &e);
+
+    // Fallback for WMs that ignore EWMH (or a bare server with no WM): raise the
+    // top-level frame (walk up to the child of root) and set input focus on the
+    // client window directly.
+    Window cur = w, parent = w, retRoot = root, *children = NULL;
+    unsigned int n = 0;
+    while (XQueryTree(d, cur, &retRoot, &parent, &children, &n)) {
+        if (children) { XFree(children); children = NULL; }
+        if (parent == retRoot || parent == 0) break;
+        cur = parent;
+    }
+    XRaiseWindow(d, cur);
+    XSetInputFocus(d, w, RevertToParent, CurrentTime);
+    XFlush(d);
+}
+
 // The keysym for a control char or, for printable ASCII/Latin-1, the codepoint
 // itself (those keysyms equal the Unicode value). Returns NoSymbol if the
 // character has no single keysym this way (e.g. emoji / CJK).

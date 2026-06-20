@@ -537,6 +537,7 @@ static void RedirectLogs(void) {
                 @{@"name": @"x11_mouse_move", @"description": @"Moves the system mouse cursor to the specified screen coordinates. Can be combined with x11_click for raw input automation tasks.", @"inputSchema": @{@"type": @"object", @"properties": @{@"x": @{@"type": @"integer", @"description": @"The X screen coordinate."}, @"y": @{@"type": @"integer", @"description": @"The Y screen coordinate."}}}, @"outputSchema": contentSchema},
                 @{@"name": @"x11_click", @"description": @"Simulates a hardware mouse button click at the current cursor position. Works for both system-level and application-level widgets.", @"inputSchema": @{@"type": @"object", @"properties": @{@"button": @{@"type": @"integer", @"description": @"The mouse button to click: 1=Left, 2=Middle, 3=Right."}}}, @"outputSchema": contentSchema},
                 @{@"name": @"x11_type", @"description": @"Simulates typing a UTF-8 string into the currently focused window. Useful for automating text entry in fields where direct Objective-C manipulation is not desired or to test actual keyboard event handling.", @"inputSchema": @{@"type": @"object", @"properties": @{@"text": @{@"type": @"string", @"description": @"The text string to type."}}}, @"outputSchema": contentSchema},
+                @{@"name": @"x11_activate_window", @"description": @"Raises and focuses the X11 window with the given XID (EWMH _NET_ACTIVE_WINDOW plus a raise/focus fallback) so subsequent mouse/keyboard input is delivered to it rather than an occluding window.", @"inputSchema": @{@"type": @"object", @"properties": @{@"xid": @{@"type": @"integer", @"description": @"The X11 window ID to raise and focus."}}}, @"outputSchema": contentSchema},
                 // LLDB Tools
                 @{@"name": @"lldb_exec", @"description": @"Executes an arbitrary LLDB command against the target application while the debugger is attached. This provides the most powerful inspection and modification capabilities, including memory scanning, breakpoint management, and backtrace inspection. Note: this may briefly pause the application execution.", @"inputSchema": @{@"type": @"object", @"properties": @{@"command": @{@"type": @"string", @"description": @"The LLDB command to execute."}}}, @"outputSchema": contentSchema}
             ]
@@ -875,6 +876,14 @@ static void RedirectLogs(void) {
                 result = @{@"status": @"ok"};
             } else {
                 errorMsg = @"Missing text";
+            }
+        } else if ([toolName isEqualToString:@"x11_activate_window"]) {
+            NSNumber *xid = callParams[@"xid"];
+            if (xid) {
+                [X11Support activateWindow:[xid unsignedLongValue]];
+                result = @{@"status": @"ok"};
+            } else {
+                errorMsg = @"Missing xid";
             }
         } else if ([toolName isEqualToString:@"lldb_exec"]) {
             if (self.currentPID == 0) {
