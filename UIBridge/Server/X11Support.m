@@ -28,8 +28,32 @@ static Display *display = NULL;
 // and release are not coalesced into a single zero-duration event.
 static const useconds_t kPressHoldMicroseconds = 40000;  // 40 ms
 
+// Xlib's default error handler calls exit() on any protocol error, which would
+// take down this long-running automation server. A few codes are expected
+// during automation — e.g. a BadWindow/BadDrawable/BadMatch from racing a window
+// that closes mid-request — and are swallowed. Anything else is logged loudly
+// but still tolerated, so genuine bugs stay visible without crashing the server.
+static int NonFatalXError(Display *dpy, XErrorEvent *e) {
+    switch (e->error_code) {
+        case BadWindow:
+        case BadDrawable:
+        case BadMatch:
+            NSDebugLLog(@"gwcomp", @"[X11Support] ignored transient X error %d (request %d)",
+                        e->error_code, e->request_code);
+            return 0;
+        default:
+            break;
+    }
+    char buf[256];
+    XGetErrorText(dpy, e->error_code, buf, sizeof(buf));
+    NSLog(@"[X11Support] X protocol error: %s (code %d, request %d) — continuing",
+          buf, e->error_code, e->request_code);
+    return 0;
+}
+
 + (Display *)display {
     if (!display) {
+        XSetErrorHandler(NonFatalXError);
         display = XOpenDisplay(NULL);
         if (!display) {
             NSDebugLLog(@"gwcomp", @"[X11Support] Failed to open X display");
