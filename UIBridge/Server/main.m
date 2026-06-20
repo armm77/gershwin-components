@@ -538,6 +538,7 @@ static void RedirectLogs(void) {
                 @{@"name": @"x11_click", @"description": @"Simulates a hardware mouse button click at the current cursor position. Works for both system-level and application-level widgets.", @"inputSchema": @{@"type": @"object", @"properties": @{@"button": @{@"type": @"integer", @"description": @"The mouse button to click: 1=Left, 2=Middle, 3=Right."}}}, @"outputSchema": contentSchema},
                 @{@"name": @"x11_type", @"description": @"Simulates typing a UTF-8 string into the currently focused window. Useful for automating text entry in fields where direct Objective-C manipulation is not desired or to test actual keyboard event handling.", @"inputSchema": @{@"type": @"object", @"properties": @{@"text": @{@"type": @"string", @"description": @"The text string to type."}}}, @"outputSchema": contentSchema},
                 @{@"name": @"x11_activate_window", @"description": @"Raises and focuses the X11 window with the given XID (EWMH _NET_ACTIVE_WINDOW plus a raise/focus fallback) so subsequent mouse/keyboard input is delivered to it rather than an occluding window.", @"inputSchema": @{@"type": @"object", @"properties": @{@"xid": @{@"type": @"integer", @"description": @"The X11 window ID to raise and focus."}}}, @"outputSchema": contentSchema},
+                @{@"name": @"x11_chord", @"description": @"Sends a single key press with zero or more modifiers held (e.g. Control+c, or just Return). Use this for keyboard shortcuts and menu accelerators that x11_type (plain text) cannot express.", @"inputSchema": @{@"type": @"object", @"properties": @{@"modifiers": @{@"type": @"array", @"items": @{@"type": @"string"}, @"description": @"Modifier names to hold: control/ctrl, alt/meta, shift, super/win."}, @"key": @{@"type": @"string", @"description": @"The key: a single character (e.g. \"c\") or an X keysym name (e.g. \"Return\", \"Left\", \"F5\")."}}}, @"outputSchema": contentSchema},
                 // LLDB Tools
                 @{@"name": @"lldb_exec", @"description": @"Executes an arbitrary LLDB command against the target application while the debugger is attached. This provides the most powerful inspection and modification capabilities, including memory scanning, breakpoint management, and backtrace inspection. Note: this may briefly pause the application execution.", @"inputSchema": @{@"type": @"object", @"properties": @{@"command": @{@"type": @"string", @"description": @"The LLDB command to execute."}}}, @"outputSchema": contentSchema}
             ]
@@ -884,6 +885,16 @@ static void RedirectLogs(void) {
                 result = @{@"status": @"ok"};
             } else {
                 errorMsg = @"Missing xid";
+            }
+        } else if ([toolName isEqualToString:@"x11_chord"]) {
+            NSString *key = callParams[@"key"];
+            if (key) {
+                NSArray *mods = callParams[@"modifiers"];
+                if (![mods isKindOfClass:[NSArray class]]) mods = @[];
+                [X11Support simulateChordWithModifiers:mods key:key];
+                result = @{@"status": @"ok"};
+            } else {
+                errorMsg = @"Missing key";
             }
         } else if ([toolName isEqualToString:@"lldb_exec"]) {
             if (self.currentPID == 0) {

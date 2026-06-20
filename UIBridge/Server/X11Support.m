@@ -28,6 +28,12 @@ static Display *display = NULL;
 // and release are not coalesced into a single zero-duration event.
 static const useconds_t kPressHoldMicroseconds = 40000;  // 40 ms
 
+// When typing a character by temporarily rebinding a spare keycode (the Unicode
+// path), how long to let the keyboard-mapping change (MappingNotify) reach the
+// target client before pressing the key, and to let it decode the press before
+// we revert.
+static const useconds_t kRemapSettleMicroseconds = 30000;  // 30 ms
+
 // Xlib's default error handler calls exit() on any protocol error, which would
 // take down this long-running automation server. A few codes are expected
 // during automation — e.g. a BadWindow/BadDrawable/BadMatch from racing a window
@@ -361,6 +367,54 @@ static KeySym KeysymForChar(unichar c) {
     return NoSymbol;
 }
 
+// Type an arbitrary Unicode scalar that has no key on the active layout by
+// temporarily binding it to an unused keycode, sending a press/release addressed
+// to the target window, then restoring that keycode — the technique xdotool uses
+// for general text. GNUstep refreshes its keymap on the MappingNotify our remap
+// triggers (XGServerEvent.m:1499), then decodes the synthetic press to the bound
+// codepoint. X maps a codepoint to the keysym 0x01000000 + codepoint.
+static void TypeUnicodeScalar(Display *d, Window target, uint32_t scalar, Time *t) {
+    int minKc = 0, maxKc = 0;
+    XDisplayKeycodes(d, &minKc, &maxKc);
+    int per = 0;
+    KeySym *map = XGetKeyboardMapping(d, minKc, maxKc - minKc + 1, &per);
+    if (!map || per <= 0) { if (map) XFree(map); return; }
+
+    // Find a keycode whose every level is unbound, searching from the top of the
+    // range where spares usually live.
+    int spare = 0;
+    for (int kc = maxKc; kc >= minKc && spare == 0; kc--) {
+        Bool unbound = True;
+        for (int l = 0; l < per; l++) {
+            if (map[(kc - minKc) * per + l] != NoSymbol) { unbound = False; break; }
+        }
+        if (unbound) spare = kc;
+    }
+    if (spare == 0) {
+        NSDebugLLog(@"gwcomp", @"[X11Support] no spare keycode to type U+%04X", scalar);
+        XFree(map);
+        return;
+    }
+
+    // X keysym for the scalar: codepoints U+0000..U+00FF are their own keysym
+    // (Latin-1); U+0100 and above use the 0x01000000 direct-Unicode encoding.
+    KeySym uni = (scalar <= 0xff) ? (KeySym)scalar : (0x01000000 | scalar);
+    KeySym bind[2] = { uni, uni };  // levels 0 and 1 both map to the scalar
+    XChangeKeyboardMapping(d, spare, 2, bind, 1);
+    XSync(d, False);
+    usleep(kRemapSettleMicroseconds);   // let the target client refresh its keymap
+
+    SendKey(d, target, (KeyCode)spare, True, 0, *t); (*t)++;
+    SendKey(d, target, (KeyCode)spare, False, 0, *t); (*t)++;
+    XSync(d, False);
+    usleep(kRemapSettleMicroseconds);   // let it decode the press before we revert
+
+    // Restore the keycode's original (unbound) mapping.
+    XChangeKeyboardMapping(d, spare, per, &map[(spare - minKc) * per], 1);
+    XSync(d, False);
+    XFree(map);
+}
+
 + (void)simulateKeyStroke:(NSString *)keyString {
     Display *d = [self display];
     if (!d) return;
@@ -381,10 +435,10 @@ static KeySym KeysymForChar(unichar c) {
             }
         }
 
-        // Characters that exist on the active layout are typed directly. When the
-        // character sits on the keycode's shifted level, set ShiftMask in the
-        // event's state so GNUstep's character lookup picks the shifted symbol
-        // (so 'A', '!', '?', ':' come out right, not their unshifted twin).
+        // Fast path: characters that exist on the active layout are typed
+        // directly. When the character sits on the keycode's shifted level, set
+        // ShiftMask in the event's state so GNUstep's character lookup picks the
+        // shifted symbol (so 'A', '!', '?', ':' come out right, not their twin).
         KeySym sym = (scalar <= 0xffff) ? KeysymForChar((unichar)scalar) : NoSymbol;
         KeyCode code = (sym != NoSymbol) ? XKeysymToKeycode(d, sym) : 0;
         if (code != 0) {
@@ -397,9 +451,91 @@ static KeySym KeysymForChar(unichar c) {
             continue;
         }
 
-        // Characters with no key on the active layout (accented Latin, CJK, emoji)
-        // are not expressible by keycode and are skipped here.
-        NSDebugLLog(@"gwcomp", @"[X11Support] no layout key for character U+%04X", scalar);
+        // Slow path: any other scalar (accented Latin not on this layout, CJK,
+        // emoji) via a temporary keymap remap.
+        TypeUnicodeScalar(d, target, scalar, &t);
+    }
+    XSync(d, False);
+}
+
+// Map a modifier name to its left-hand keysym; NoSymbol if unrecognised.
+static KeySym ModifierKeysym(NSString *name) {
+    NSString *m = [name lowercaseString];
+    if ([m isEqualToString:@"control"] || [m isEqualToString:@"ctrl"]) return XK_Control_L;
+    if ([m isEqualToString:@"alt"] || [m isEqualToString:@"meta"]) return XK_Alt_L;
+    if ([m isEqualToString:@"shift"]) return XK_Shift_L;
+    if ([m isEqualToString:@"super"] || [m isEqualToString:@"win"]) return XK_Super_L;
+    return NoSymbol;
+}
+
+// The X modifier-mask bit (ShiftMask, ControlMask, Mod1Mask…) bound to a modifier
+// keysym, by scanning the modifier map; 0 if unbound. Used so a chord's character
+// is looked up at the right shift level (GNUstep's character lookup honours the
+// event state, even though its *modifier flags* come from tracked key presses).
+static unsigned int ModMaskForKeysym(Display *d, KeySym sym) {
+    KeyCode target = XKeysymToKeycode(d, sym);
+    if (target == 0) return 0;
+    XModifierKeymap *mm = XGetModifierMapping(d);
+    if (!mm) return 0;
+    unsigned int mask = 0;
+    for (int i = 0; i < 8 && mask == 0; i++) {
+        for (int j = 0; j < mm->max_keypermod; j++) {
+            if (mm->modifiermap[i * mm->max_keypermod + j] == target) {
+                mask = (1u << i);
+                break;
+            }
+        }
+    }
+    XFreeModifiermap(mm);
+    return mask;
+}
+
+// Resolve a chord key string to a keysym: a single character via KeysymForChar,
+// otherwise an X keysym name ("Return", "Left", "F5", "Tab").
+static KeySym ChordKeysym(NSString *key) {
+    if ([key length] == 1) {
+        KeySym s = KeysymForChar([key characterAtIndex:0]);
+        if (s != NoSymbol) return s;
+    }
+    return XStringToKeysym([key UTF8String]);
+}
+
++ (void)simulateChordWithModifiers:(NSArray *)modifiers key:(NSString *)key {
+    Display *d = [self display];
+    if (!d) return;
+
+    KeySym ksym = ChordKeysym(key);
+    if (ksym == NoSymbol) {
+        NSDebugLLog(@"gwcomp", @"[X11Support] unknown chord key '%@'", key);
+        return;
+    }
+    KeyCode code = XKeysymToKeycode(d, ksym);
+    if (code == 0) return;
+
+    Window target = ResolveKeyTarget(d);
+    if (target == None) return;
+    Time t = ServerTime(d);
+
+    // Press the modifiers (so GNUstep tracks them and reports the right modifier
+    // flags), accumulating their state mask so the key's character is looked up at
+    // the correct shift level; tap the key; release the modifiers in reverse.
+    KeyCode held[8];
+    unsigned int state = 0;
+    NSUInteger n = 0;
+    for (id name in modifiers) {
+        if (n >= 8 || ![name isKindOfClass:[NSString class]]) continue;
+        KeySym ms = ModifierKeysym(name);
+        if (ms == NoSymbol) continue;
+        KeyCode mc = XKeysymToKeycode(d, ms);
+        if (mc == 0) continue;
+        state |= ModMaskForKeysym(d, ms);
+        held[n++] = mc;
+        SendKey(d, target, mc, True, 0, t); t++;
+    }
+    SendKey(d, target, code, True, state, t); t++;
+    SendKey(d, target, code, False, state, t); t++;
+    for (NSUInteger i = n; i > 0; i--) {
+        SendKey(d, target, held[i - 1], False, 0, t); t++;
     }
     XSync(d, False);
 }
