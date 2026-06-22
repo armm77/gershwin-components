@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>packages</key>
+  <array>
+    <string>firefox</string>
+  </array>
+  <key>postinstall_command</key>
+  <string>/usr/bin/firefox</string>
+  <key>os_overrides</key>
+  <dict>
+    <key>debian</key>
+    <dict>
+      <key>packages</key>
+      <array>
+        <string>firefox-esr</string>
+      </array>
+      <key>postinstall_command</key>
+      <string>/usr/bin/firefox-esr</string>
+    </dict>
+    <key>freebsd</key>
+    <dict>
+      <key>postinstall_command</key>
+      <string>/usr/bin/firefox</string>
+    </dict>
+    <key>openbsd</key>
+    <dict>
+      <key>packages</key>
+      <array>
+        <string>firefox</string>
+      </array>
+      <key>postinstall_command</key>
+      <string>/usr/local/bin/firefox</string>
+    </dict>
+  </dict>
+</dict>
+</plist>
