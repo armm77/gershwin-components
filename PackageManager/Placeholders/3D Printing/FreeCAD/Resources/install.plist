@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>os_overrides</key>
+	<dict>
+		<key>freebsd</key>
+		<dict>
+			<key>packages</key>
+			<array>
+				<string>freecad</string>
+			</array>
+			<key>postinstall_command</key>
+			<string>/usr/local/bin/FreeCAD</string>
+		</dict>
+		<key>openbsd</key>
+		<dict>
+			<key>packages</key>
+			<array>
+				<string>freecad</string>
+			</array>
+			<key>postinstall_command</key>
+			<string>/usr/local/bin/FreeCAD</string>
+		</dict>
+	</dict>
+	<key>packages</key>
+	<array>
+		<string>freecad</string>
+	</array>
+	<key>postinstall_command</key>
+	<string>/usr/bin/freecad</string>
+</dict>
+</plist>
