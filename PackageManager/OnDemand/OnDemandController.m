@@ -684,7 +684,7 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
                                                       contentW, kDetailsTextH)];
       [_detailsScrollView setDocumentView:_detailsTextView];
       [_detailsScrollView setHasVerticalScroller:YES];
-      [_detailsScrollView setAutoresizingMask:NSViewWidthSizable];
+      [_detailsScrollView setAutoresizingMask:NSViewNotSizable];
       [_detailsScrollView setBorderType:NSBezelBorder];
       [_detailsScrollView setHidden:YES];
       [[_window contentView] addSubview:_detailsScrollView
@@ -705,11 +705,11 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
 
   if (_detailsVisible)
     {
-      // Grow the window downward — top stays fixed
+      // Grow the window — no display yet so all changes land in one frame
       NSRect frame = [_window frame];
       frame.origin.y -= growBy;
       frame.size.height += growBy;
-      [_window setFrame:frame display:YES];
+      [_window setFrame:frame display:NO];
 
       // Shift existing controls up so their screen position stays put
       for (NSView *v in [[_window contentView] subviews])
@@ -724,18 +724,19 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
       [_detailsScrollView setFrame:NSMakeRect(kSideMargin, 0,
                                                contentW, kDetailsTextH)];
       [_detailsScrollView setHidden:NO];
-      [[_window contentView] setNeedsDisplay:YES];
+      // Single display pass that shows everything in its final position
+      [_window display];
 
       NSRange end = NSMakeRange([[_detailsTextView string] length], 0);
       [_detailsTextView scrollRangeToVisible:end];
     }
   else
     {
-      // Shrink the window back
+      // Shrink the window — no display yet so all changes land in one frame
       NSRect frame = [_window frame];
       frame.origin.y += growBy;
       frame.size.height -= growBy;
-      [_window setFrame:frame display:YES];
+      [_window setFrame:frame display:NO];
 
       // Shift controls back down
       for (NSView *v in [[_window contentView] subviews])
@@ -747,7 +748,7 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
         }
 
       [_detailsScrollView setHidden:YES];
-      [[_window contentView] setNeedsDisplay:YES];
+      [_window display];
     }
 }
 
