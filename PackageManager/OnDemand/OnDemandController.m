@@ -481,8 +481,12 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
       if (!success)
         {
           [self _populateDetailsFromBackend];
-          NSString *msg = [GWPackageManager friendlyErrorMessageForError:error
-                                                                  appName:_appName];
+          // Show the actual backend stderr output instead of a generic message
+          NSString *captured = [_pm capturedErrorOutput];
+          NSString *msg = captured;
+          if ([msg length] == 0)
+            msg = [GWPackageManager friendlyErrorMessageForError:error
+                                                          appName:_appName];
           NSLog(@"OnDemand [FAIL] [Step 1/2] Download FAILED: %@", msg);
           [self _showError:msg];
           // After showing error briefly, cleanly terminate
