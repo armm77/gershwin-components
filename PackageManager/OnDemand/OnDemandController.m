@@ -668,6 +668,9 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
 
   if (_detailsVisible && !_detailsTextView)
     {
+      // Create views but do NOT add to window hierarchy yet.
+      // They are added in _resizeForDetails AFTER the window resize
+      // so the resize pass never touches them.
       CGFloat contentW = kWinWidth - 2 * kSideMargin;
 
       _detailsTextView = [[NSTextView alloc]
@@ -684,17 +687,9 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
                                                       contentW, kDetailsTextH)];
       [_detailsScrollView setDocumentView:_detailsTextView];
       [_detailsScrollView setHasVerticalScroller:YES];
-      [_detailsScrollView setAutoresizingMask:NSViewNotSizable];
       [_detailsScrollView setBorderType:NSBezelBorder];
-      [_detailsScrollView setHidden:YES];
-      [[_window contentView] addSubview:_detailsScrollView
-                             positioned:NSWindowBelow relativeTo:nil];
-      [self _populateDetailsFromBackend];
     }
 
-  // Defer the resize to the next run loop pass using the NSRunLoop timer
-  // mechanism (performSelector:afterDelay:), which integrates cleanly with
-  // the AppKit event loop in GNUstep.
   [self performSelector:@selector(_resizeForDetails) withObject:nil afterDelay:0];
 }
 
@@ -714,24 +709,33 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
       // Shift existing controls up so their screen position stays put
       for (NSView *v in [[_window contentView] subviews])
         {
-          if (v == _detailsScrollView) continue;
           NSRect f = [v frame];
           f.origin.y += growBy;
           [v setFrame:f];
         }
 
-      // Show the text view at the very bottom (y=0 = bottom of content view)
+      // NOW add the scroll view to the hierarchy — the resize is done,
+      // so the scroll view is never touched by any resize pass.
+      // If it was already added (second+ toggle), just reposition it.
+      if ([_detailsScrollView superview] == nil)
+        [[_window contentView] addSubview:_detailsScrollView];
       [_detailsScrollView setFrame:NSMakeRect(kSideMargin, 0,
                                                contentW, kDetailsTextH)];
       [_detailsScrollView setHidden:NO];
+
       // Single display pass that shows everything in its final position
       [_window display];
 
       NSRange end = NSMakeRange([[_detailsTextView string] length], 0);
       [_detailsTextView scrollRangeToVisible:end];
+      [self _populateDetailsFromBackend];
     }
   else
     {
+      // Hide the scroll view first, then resize (it's still in the hierarchy
+      // but hidden so resize passes won't touch it)
+      [_detailsScrollView setHidden:YES];
+
       // Shrink the window — no display yet so all changes land in one frame
       NSRect frame = [_window frame];
       frame.origin.y += growBy;
@@ -747,7 +751,6 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
           [v setFrame:f];
         }
 
-      [_detailsScrollView setHidden:YES];
       [_window display];
     }
 }
