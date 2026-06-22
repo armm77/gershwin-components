@@ -34,6 +34,7 @@ static const CGFloat kIconLeft = 24.0;            // METRICS_ICON_LEFT
 static const CGFloat kTextLeft = 104.0;           // METRICS_TEXT_LEFT = 24 + 64 + 16
 static const CGFloat kSpace8 = 8.0;               // METRICS_SPACE_8
 static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
+static const CGFloat kDetailsTextH = 140.0;        // expanded details height
 
 #pragma mark - OnDemandController
 
@@ -254,13 +255,6 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
   [_descriptionField setHidden:YES];
   [_installButton setHidden:YES];
 
-  // Make the window taller to accommodate the details disclosure section
-  CGFloat kDetailsExtra = 160.0;
-  NSRect wf = [_window frame];
-  wf.origin.y -= kDetailsExtra;
-  wf.size.height += kDetailsExtra;
-  [_window setFrame:wf display:YES animate:YES];
-
   // Create progress UI lazily
   CGFloat cx = kSideMargin;
   CGFloat contentW = kWinWidth - 2 * kSideMargin;
@@ -285,11 +279,12 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
   [_statusField setAlignment:NSTextAlignmentLeft];
   [[_window contentView] addSubview:_statusField];
 
-  // ── Details disclosure section ──
-  CGFloat detailsY = statY + kLineHeight + kSpace8;        // 110
+  // ── Details disclosure toggle (left side, same row as Cancel) ──
   _detailsVisible = NO;
+  _detailsScrollView = nil;
+  _detailsTextView = nil;
 
-  _detailsToggle = [[NSButton alloc] initWithFrame:NSMakeRect(kTextLeft, detailsY, 160.0, kLineHeight)];
+  _detailsToggle = [[NSButton alloc] initWithFrame:NSMakeRect(kSideMargin, kBottomMargin, 130.0, kBtnHeight)];
   [_detailsToggle setTitle:@"  ▶  Details"];
   [_detailsToggle setTarget:self];
   [_detailsToggle setAction:@selector(detailsToggled:)];
@@ -297,27 +292,6 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
   [[_detailsToggle cell] setFont:[NSFont systemFontOfSize:11.0]];
   [[_detailsToggle cell] setHighlightsBy:NSContentsCellMask];
   [[_window contentView] addSubview:_detailsToggle];
-
-  // Details text view (hidden initially) — 150pt tall, full width from kTextLeft
-  CGFloat detailsTextY = detailsY + kLineHeight + 2.0;
-  CGFloat detailsTextH = 120.0;
-  NSRect tvFrame = NSMakeRect(kTextLeft, detailsTextY, contentW - kTextLeft + cx, detailsTextH);
-
-  _detailsTextView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, tvFrame.size.width, tvFrame.size.height)];
-  [_detailsTextView setEditable:NO];
-  [_detailsTextView setSelectable:YES];
-  [_detailsTextView setFont:[NSFont userFixedPitchFontOfSize:10.0]];
-  [_detailsTextView setTextColor:[NSColor colorWithCalibratedWhite:0.22 alpha:1.0]];
-  [_detailsTextView setBackgroundColor:[NSColor colorWithCalibratedWhite:0.95 alpha:1.0]];
-  [_detailsTextView setAutoresizingMask:NSViewWidthSizable];
-
-  _detailsScrollView = [[NSScrollView alloc] initWithFrame:tvFrame];
-  [_detailsScrollView setDocumentView:_detailsTextView];
-  [_detailsScrollView setHasVerticalScroller:YES];
-  [_detailsScrollView setAutoresizingMask:NSViewWidthSizable];
-  [_detailsScrollView setBorderType:NSBezelBorder];
-  [_detailsScrollView setHidden:YES];
-  [[_window contentView] addSubview:_detailsScrollView];
 
   // Cancel button in lower-right (matching Download button position from confirmation state)
   [_cancelButton setFrameOrigin:NSMakePoint(
@@ -629,15 +603,68 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
 - (void)detailsToggled:(id)sender
 {
   _detailsVisible = !_detailsVisible;
-  [_detailsScrollView setHidden:!_detailsVisible];
   NSString *arrow = _detailsVisible ? @"  ▼" : @"  ▶";
   [_detailsToggle setTitle:[NSString stringWithFormat:@"%@  Details", arrow]];
 
-  // Scroll to bottom on reveal
-  if (_detailsVisible && _detailsTextView)
+  CGFloat contentW = kWinWidth - 2 * kSideMargin;
+
+  if (_detailsVisible)
     {
-      NSRange endRange = NSMakeRange([[_detailsTextView string] length], 0);
-      [_detailsTextView scrollRangeToVisible:endRange];
+      // Lazily create the details text view
+      if (!_detailsTextView)
+        {
+          CGFloat tvW = contentW;
+          CGFloat tvY = kSpace8;   // sits above absolute bottom, below button row
+
+          _detailsTextView = [[NSTextView alloc]
+                               initWithFrame:NSMakeRect(0, 0, tvW, kDetailsTextH)];
+          [_detailsTextView setEditable:NO];
+          [_detailsTextView setSelectable:YES];
+          [_detailsTextView setFont:[NSFont userFixedPitchFontOfSize:10.0]];
+          [_detailsTextView setTextColor:[NSColor colorWithCalibratedWhite:0.22 alpha:1.0]];
+          [_detailsTextView setBackgroundColor:[NSColor colorWithCalibratedWhite:0.95 alpha:1.0]];
+          [_detailsTextView setAutoresizingMask:NSViewWidthSizable];
+
+          _detailsScrollView = [[NSScrollView alloc]
+                                 initWithFrame:NSMakeRect(kSideMargin, tvY, tvW, kDetailsTextH)];
+          [_detailsScrollView setDocumentView:_detailsTextView];
+          [_detailsScrollView setHasVerticalScroller:YES];
+          [_detailsScrollView setAutoresizingMask:NSViewWidthSizable];
+          [_detailsScrollView setBorderType:NSBezelBorder];
+          // Insert at back so the button row stays on top visually
+          [[_window contentView] addSubview:_detailsScrollView
+                                 positioned:NSWindowBelow
+                                 relativeTo:nil];
+          // Populate with any output captured before the view was created
+          [self _populateDetailsFromBackend];
+        }
+
+      [_detailsScrollView setHidden:NO];
+
+      // Grow the window downward — top stays fixed
+      CGFloat growBy = kDetailsTextH + kSpace8 + kBottomMargin;
+      NSRect frame = [_window frame];
+      frame.origin.y -= growBy;
+      frame.size.height += growBy;
+      [_window setFrame:frame display:YES animate:YES];
+
+      // Layout the text view in the new bottom area
+      [_detailsScrollView setFrame:NSMakeRect(kSideMargin, kSpace8, contentW, kDetailsTextH)];
+
+      // Scroll to bottom
+      NSRange end = NSMakeRange([[_detailsTextView string] length], 0);
+      [_detailsTextView scrollRangeToVisible:end];
+    }
+  else
+    {
+      // Shrink the window back — top stays fixed
+      CGFloat growBy = kDetailsTextH + kSpace8 + kBottomMargin;
+      NSRect frame = [_window frame];
+      frame.origin.y += growBy;
+      frame.size.height -= growBy;
+      [_window setFrame:frame display:YES animate:YES];
+
+      [_detailsScrollView setHidden:YES];
     }
 }
 
