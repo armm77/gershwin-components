@@ -680,7 +680,7 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
       [_detailsTextView setAutoresizingMask:NSViewWidthSizable];
 
       _detailsScrollView = [[NSScrollView alloc]
-                             initWithFrame:NSMakeRect(kSideMargin, kSpace8,
+                             initWithFrame:NSMakeRect(kSideMargin, 0,
                                                       contentW, kDetailsTextH)];
       [_detailsScrollView setDocumentView:_detailsTextView];
       [_detailsScrollView setHasVerticalScroller:YES];
@@ -701,7 +701,7 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
 - (void)_resizeForDetails
 {
   CGFloat contentW = kWinWidth - 2 * kSideMargin;
-  CGFloat growBy = kDetailsTextH + kSpace8 + kBottomMargin;
+  CGFloat growBy = kDetailsTextH;
 
   if (_detailsVisible)
     {
@@ -720,8 +720,8 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
           [v setFrame:f];
         }
 
-      // Show the text view at the very bottom
-      [_detailsScrollView setFrame:NSMakeRect(kSideMargin, kSpace8,
+      // Show the text view at the very bottom (y=0 = bottom of content view)
+      [_detailsScrollView setFrame:NSMakeRect(kSideMargin, 0,
                                                contentW, kDetailsTextH)];
       [_detailsScrollView setHidden:NO];
       [[_window contentView] setNeedsDisplay:YES];
