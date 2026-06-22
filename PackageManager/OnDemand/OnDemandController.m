@@ -483,6 +483,9 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
           [self _populateDetailsFromBackend];
           // Show the actual backend stderr output instead of a generic message
           NSString *captured = [_pm capturedErrorOutput];
+          // Strip "E: " prefix that apt prepends to each error line
+          if ([captured hasPrefix:@"E: "])
+            captured = [captured substringFromIndex:3];
           NSString *msg = captured;
           if ([msg length] == 0)
             msg = [GWPackageManager friendlyErrorMessageForError:error
