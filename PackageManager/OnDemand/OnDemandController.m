@@ -709,7 +709,7 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
       NSRect frame = [_window frame];
       frame.origin.y -= growBy;
       frame.size.height += growBy;
-      [_window setFrame:frame display:YES animate:YES];
+      [_window setFrame:frame display:YES];
 
       // Shift existing controls up so their screen position stays put
       for (NSView *v in [[_window contentView] subviews])
@@ -735,7 +735,7 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
       NSRect frame = [_window frame];
       frame.origin.y += growBy;
       frame.size.height -= growBy;
-      [_window setFrame:frame display:YES animate:YES];
+      [_window setFrame:frame display:YES];
 
       // Shift controls back down
       for (NSView *v in [[_window contentView] subviews])
