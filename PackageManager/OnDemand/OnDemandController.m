@@ -457,12 +457,63 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
 
 #pragma mark - Main Workflow (install + launch)
 
+/// Show an error and schedule clean termination (helper for the install path)
+- (void)_showInstallError:(NSString *)message
+{
+  NSLog(@"OnDemand [FAIL] Download FAILED: %@", message);
+  [self _showError:message];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                 dispatch_get_main_queue(), ^{
+    if (!_isTerminating)
+      {
+        _isTerminating = YES;
+        [NSApp terminate:nil];
+      }
+  });
+}
+
+/// Post-install launch step — called on the main thread after a successful install.
+- (void)_launchAfterInstall
+{
+  [_progressBar setDoubleValue:1.0];
+  [_window setTitle:[NSString stringWithFormat:@"Downloading %@", _appName]];
+  NSString *command = [_spec postCommand];
+  NSArray *commandArgs = [_spec postCommandArguments];
+
+  if (command)
+    {
+      NSLog(@"OnDemand -> [Step 2/2] Executing command: %@", command);
+      [_statusField setStringValue:@"Launching..."];
+
+      dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        int status = [self _executeCommand:command arguments:commandArgs];
+        dispatch_async(dispatch_get_main_queue(), ^{
+          if (status != 0)
+            {
+              NSLog(@"OnDemand [FAIL] [Step 2/2] Execution FAILED: %@ (status %d)", command, status);
+              [self _showError:[NSString stringWithFormat:
+                                @"%@ was downloaded but could not be launched.", _appName]];
+              [self _exitWithCommandStatus:status command:command];
+              return;
+            }
+          NSLog(@"OnDemand [OK] [Step 2/2] Execution succeeded (exit %d), exiting", status);
+          [self _exitWithCommandStatus:status command:command];
+        });
+      });
+    }
+  else
+    {
+      NSLog(@"OnDemand -> performInstallAndLaunch: no postinstall command, done");
+      [_statusField setStringValue:@"Download complete"];
+      exit(0);
+    }
+}
+
 - (void)performInstallAndLaunch
 {
   NSString *command = [_spec postCommand];
   NSArray *packages = [_spec packages];
   NSArray *localFiles = [_spec localFilePaths];
-  NSArray *commandArgs = [_spec postCommandArguments];
 
   NSLog(@"OnDemand -> performInstallAndLaunch: BEGIN (command=%@, packages=%@, local=%@)",
         command, packages, localFiles);
@@ -481,63 +532,65 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
       if (!success)
         {
           [self _populateDetailsFromBackend];
-          // Show the actual backend stderr output instead of a generic message
           NSString *captured = [_pm capturedErrorOutput];
-          // Strip "E: " prefix that apt prepends to each error line
+
+          // ── Auto-recover from interrupted dpkg state ──
+          if (!_dpkgRetried && captured &&
+              [captured rangeOfString:@"dpkg --configure -a"].location != NSNotFound)
+            {
+              _dpkgRetried = YES;
+              NSLog(@"OnDemand: dpkg was interrupted, running --configure -a and retrying...");
+              [_statusField setStringValue:@"Recovering from interrupted package configuration…"];
+
+              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                // Fix the interrupted dpkg state
+                [self _executeCommand:@"/usr/bin/sudo"
+                           arguments:@[@"dpkg", @"--configure", @"-a"]];
+
+                // Retry the install once
+                NSError *retryError = nil;
+                BOOL retrySuccess = [_pm installPackages:packages
+                                          localFilePaths:localFiles
+                                               progress:self
+                                                  error:&retryError];
+
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  if (retrySuccess)
+                    {
+                      NSLog(@"OnDemand: dpkg recovery succeeded, continuing...");
+                      [self _populateDetailsFromBackend];
+                      [self _launchAfterInstall];
+                    }
+                  else
+                    {
+                      [self _populateDetailsFromBackend];
+                      NSString *retryCaptured = [_pm capturedErrorOutput];
+                      if ([retryCaptured hasPrefix:@"E: "])
+                        retryCaptured = [retryCaptured substringFromIndex:3];
+                      if ([retryCaptured length] == 0)
+                        retryCaptured = [GWPackageManager friendlyErrorMessageForError:retryError
+                                                                                appName:_appName];
+                      [self _showInstallError:retryCaptured];
+                    }
+                });
+              });
+              return;
+            }
+
+          // ── Normal error ──
           if ([captured hasPrefix:@"E: "])
             captured = [captured substringFromIndex:3];
           NSString *msg = captured;
           if ([msg length] == 0)
             msg = [GWPackageManager friendlyErrorMessageForError:error
                                                           appName:_appName];
-          NSLog(@"OnDemand [FAIL] [Step 1/2] Download FAILED: %@", msg);
-          [self _showError:msg];
-          // After showing error briefly, cleanly terminate
-          dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                         dispatch_get_main_queue(), ^{
-            if (!_isTerminating)
-              {
-                _isTerminating = YES;
-                [NSApp terminate:nil];
-              }
-          });
+          [self _showInstallError:msg];
           return;
         }
 
       NSLog(@"OnDemand [OK] [Step 1/2] Download succeeded");
       [self _populateDetailsFromBackend];
-      [_progressBar setDoubleValue:1.0];
-
-      // Execute the command (inherits stdio, passes through exit code)
-      if (command)
-        {
-          NSLog(@"OnDemand -> [Step 2/2] Executing command: %@", command);
-          [_statusField setStringValue:@"Launching..."];
-
-          // Launch is also blocking — run on background thread
-          dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            int status = [self _executeCommand:command arguments:commandArgs];
-            dispatch_async(dispatch_get_main_queue(), ^{
-              if (status != 0)
-                {
-                  NSLog(@"OnDemand [FAIL] [Step 2/2] Execution FAILED: %@ (status %d)", command, status);
-                  [self _showError:[NSString stringWithFormat:
-                                    @"%@ was downloaded but could not be launched.", _appName]];
-                  [self _exitWithCommandStatus:status command:command];
-                  return;
-                }
-
-              NSLog(@"OnDemand [OK] [Step 2/2] Execution succeeded (exit %d), exiting", status);
-              [self _exitWithCommandStatus:status command:command];
-            });
-          });
-        }
-      else
-        {
-          NSLog(@"OnDemand -> performInstallAndLaunch: no postinstall command, done");
-          [_statusField setStringValue:@"Download complete"];
-          exit(0);
-        }
+      [self _launchAfterInstall];
     });
   });
 }
@@ -580,7 +633,7 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
   NSAlert *alert = [[NSAlert alloc] init];
   [alert setMessageText:_appName ?: @"Application"];
   [alert setInformativeText:message];
-  [alert addButtonWithTitle:@"Quit"];
+  [alert addButtonWithTitle:@"Cancel"];
   [alert setAlertStyle:0]; // critical
 
   void (^showBlock)(void) = ^{

@@ -32,6 +32,7 @@
   GWPackageInstallSpec *_spec;
   NSString *_plistPath;
   NSString *_appName;
+  BOOL _dpkgRetried;
 }
 
 // Read the install plist from the app bundle
