@@ -134,7 +134,7 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
                + totalDescH + kSpace8 + kIconSide + kTopMargin;
 
   _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, kWinWidth, winH)
-                                        styleMask:NSWindowStyleMaskTitled
+                                        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
                                           backing:NSBackingStoreBuffered
                                             defer:NO];
 
@@ -613,12 +613,10 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
   NSString *arrow = _detailsVisible ? @"  ▼" : @"  ▶";
   [_detailsToggle setTitle:[NSString stringWithFormat:@"%@  Details", arrow]];
 
-  CGFloat contentW = kWinWidth - 2 * kSideMargin;
-  CGFloat growBy = kDetailsTextH + kSpace8 + kBottomMargin;
-
-  // Create the text view on first open (synchronous — safe to do here)
   if (_detailsVisible && !_detailsTextView)
     {
+      CGFloat contentW = kWinWidth - 2 * kSideMargin;
+
       _detailsTextView = [[NSTextView alloc]
                            initWithFrame:NSMakeRect(0, 0, contentW, kDetailsTextH)];
       [_detailsTextView setEditable:NO];
@@ -641,57 +639,63 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
       [self _populateDetailsFromBackend];
     }
 
-  // Defer the actual resize and subview shift so the button action returns
-  // first — in GNUstep, setFrame: inside an action handler often doesn't
-  // take effect on the screen.
-  dispatch_async(dispatch_get_main_queue(), ^{
-    if (_detailsVisible)
-      {
-        // Grow the window downward — top stays fixed
-        NSRect frame = [_window frame];
-        frame.origin.y -= growBy;
-        frame.size.height += growBy;
-        [_window setFrame:frame display:YES];
+  // Defer the resize to the next run loop pass using the NSRunLoop timer
+  // mechanism (performSelector:afterDelay:), which integrates cleanly with
+  // the AppKit event loop in GNUstep.
+  [self performSelector:@selector(_resizeForDetails) withObject:nil afterDelay:0];
+}
 
-        // Shift existing controls up so they keep their screen position
-        for (NSView *v in [[_window contentView] subviews])
-          {
-            if (v == _detailsScrollView) continue;
-            NSRect f = [v frame];
-            f.origin.y += growBy;
-            [v setFrame:f];
-          }
+- (void)_resizeForDetails
+{
+  CGFloat contentW = kWinWidth - 2 * kSideMargin;
+  CGFloat growBy = kDetailsTextH + kSpace8 + kBottomMargin;
 
-        // Show the text view at the very bottom (below everything)
-        [_detailsScrollView setFrame:NSMakeRect(kSideMargin, kSpace8,
-                                                contentW, kDetailsTextH)];
-        [_detailsScrollView setHidden:NO];
-        [[_window contentView] setNeedsDisplay:YES];
+  if (_detailsVisible)
+    {
+      // Grow the window downward — top stays fixed
+      NSRect frame = [_window frame];
+      frame.origin.y -= growBy;
+      frame.size.height += growBy;
+      [_window setFrame:frame display:YES animate:YES];
 
-        NSRange end = NSMakeRange([[_detailsTextView string] length], 0);
-        [_detailsTextView scrollRangeToVisible:end];
-      }
-    else
-      {
-        // Shrink the window back
-        NSRect frame = [_window frame];
-        frame.origin.y += growBy;
-        frame.size.height -= growBy;
-        [_window setFrame:frame display:YES];
+      // Shift existing controls up so their screen position stays put
+      for (NSView *v in [[_window contentView] subviews])
+        {
+          if (v == _detailsScrollView) continue;
+          NSRect f = [v frame];
+          f.origin.y += growBy;
+          [v setFrame:f];
+        }
 
-        // Shift controls back down
-        for (NSView *v in [[_window contentView] subviews])
-          {
-            if (v == _detailsScrollView) continue;
-            NSRect f = [v frame];
-            f.origin.y -= growBy;
-            [v setFrame:f];
-          }
+      // Show the text view at the very bottom
+      [_detailsScrollView setFrame:NSMakeRect(kSideMargin, kSpace8,
+                                               contentW, kDetailsTextH)];
+      [_detailsScrollView setHidden:NO];
+      [[_window contentView] setNeedsDisplay:YES];
 
-        [_detailsScrollView setHidden:YES];
-        [[_window contentView] setNeedsDisplay:YES];
-      }
-  });
+      NSRange end = NSMakeRange([[_detailsTextView string] length], 0);
+      [_detailsTextView scrollRangeToVisible:end];
+    }
+  else
+    {
+      // Shrink the window back
+      NSRect frame = [_window frame];
+      frame.origin.y += growBy;
+      frame.size.height -= growBy;
+      [_window setFrame:frame display:YES animate:YES];
+
+      // Shift controls back down
+      for (NSView *v in [[_window contentView] subviews])
+        {
+          if (v == _detailsScrollView) continue;
+          NSRect f = [v frame];
+          f.origin.y -= growBy;
+          [v setFrame:f];
+        }
+
+      [_detailsScrollView setHidden:YES];
+      [[_window contentView] setNeedsDisplay:YES];
+    }
 }
 
 #pragma mark - Live Output from Backend
