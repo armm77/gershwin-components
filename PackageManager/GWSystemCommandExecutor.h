@@ -24,6 +24,15 @@
         output:(NSString *__autoreleasing *)output
   errorOutput:(NSString *__autoreleasing *)errorOutput;
 
+// Execute a command with live per-line stderr callback and full stderr capture.
+// The callback is invoked for each complete line of stderr output as the command
+// runs (including trailing \r characters trimmed).  capturedErrorOutput receives
+// every byte written to stderr.
+- (int)execute:(NSString *)path
+     arguments:(NSArray<NSString *> *)args
+ stderrCallback:(nullable void (^)(NSString *line))callback
+ capturedErrorOutput:(NSString *__autoreleasing *)errorOutput;
+
 @end
 
 #pragma mark - Real Implementation (uses NSTask)

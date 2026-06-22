@@ -173,6 +173,21 @@ static void runTest(NSString *name, BOOL (^block)(void))
   return [result[@"exitCode"] intValue];
 }
 
+- (int)execute:(NSString *)path
+     arguments:(NSArray *)args
+ stderrCallback:(void (^)(NSString *line))callback
+ capturedErrorOutput:(NSString *__autoreleasing *)errorOutput
+{
+  // Delegate to the existing output-capturing variant
+  NSString *captured = nil;
+  int rc = [self execute:path arguments:args output:nil errorOutput:&captured];
+  if (errorOutput) *errorOutput = captured ?: @"";
+  // Call the callback with the captured output as a single line
+  if (callback && [captured length] > 0)
+    callback(captured);
+  return rc;
+}
+
 @end
 
 #pragma mark Mock Backend

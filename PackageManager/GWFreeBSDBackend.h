@@ -15,6 +15,10 @@
 #pragma mark - GWFreeBSDBackend Interface
 
 @interface GWFreeBSDBackend : NSObject <GWPackageManagerBackend>
+{
+@private
+  NSString *_capturedErrorOutput;
+}
 
 - (instancetype)initWithExecutor:(id<GWSystemCommandExecutor>)executor;
 

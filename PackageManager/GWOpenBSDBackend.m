@@ -21,6 +21,7 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
 @implementation GWOpenBSDBackend
 
 @synthesize backendName = _backendName;
+@synthesize capturedErrorOutput = _capturedErrorOutput;
 
 #pragma mark - Initialization
 
@@ -52,13 +53,22 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
 {
   NSLog(@"GWOpenBSDBackend -> installPackages: %@ (local: %@)", packageNames, filePaths);
   [progressHandler installDidProgress:0.0f message:@"Preparing..."];
+  _capturedErrorOutput = @"";
 
   // Install local files first
   if ([filePaths count] > 0) {
     NSMutableArray *args = [NSMutableArray arrayWithArray:@[@"-A", @"-E", kPkgAddPath]];
     [args addObjectsFromArray:filePaths];
 
-    int status = [_executor execute:kSudoPath arguments:args];
+    NSString *stderr = nil;
+    int status = [_executor execute:kSudoPath
+                          arguments:args
+                    stderrCallback:^(NSString *line) {
+                      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                        [progressHandler installDidOutputLine:line];
+                    }
+              capturedErrorOutput:&stderr];
+    _capturedErrorOutput = stderr ?: @"";
     if (status != 0) {
       if (error) {
         *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
@@ -72,6 +82,7 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     }
   }
 
+  __block BOOL waitingWasReported = NO;
   [progressHandler installDidProgress:0.5f message:@"Installing packages..."];
 
   // Install packages from repositories
@@ -80,7 +91,27 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     [args addObjectsFromArray:packageNames];
 
     NSLog(@"GWOpenBSDBackend -> pkg_add %@", packageNames);
-    int status = [_executor execute:kSudoPath arguments:args];
+    NSString *stderr = nil;
+    int status = [_executor execute:kSudoPath
+                          arguments:args
+                    stderrCallback:^(NSString *line)
+    {
+      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+        [progressHandler installDidOutputLine:line];
+
+      // Detect when pkg_add is waiting for another process to release the lock
+      if (!waitingWasReported &&
+          [line rangeOfString:@"Package database already locked"
+                     options:NSCaseInsensitiveSearch].location != NSNotFound)
+        {
+          waitingWasReported = YES;
+          [progressHandler installDidProgress:0.5f
+                                     message:@"Waiting for other installations to finish…"];
+        }
+    }
+              capturedErrorOutput:&stderr];
+    if (stderr)
+      _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:stderr];
     NSLog(@"GWOpenBSDBackend <- pkg_add exit code: %d", status);
     if (status != 0) {
       if (error) {

@@ -22,6 +22,12 @@
   NSButton *_installButton;
   NSTextField *_descriptionField;
 
+  // Details disclosure UI
+  NSButton *_detailsToggle;
+  NSScrollView *_detailsScrollView;
+  NSTextView *_detailsTextView;
+  BOOL _detailsVisible;
+
   GWPackageManager *_pm;
   GWPackageInstallSpec *_spec;
   NSString *_plistPath;

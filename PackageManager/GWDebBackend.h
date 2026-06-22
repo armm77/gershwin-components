@@ -15,9 +15,14 @@
 #pragma mark - GWDebBackend Interface
 
 @interface GWDebBackend : NSObject <GWPackageManagerBackend>
+{
+@private
+  NSString *_capturedErrorOutput;
+}
 
 - (instancetype)initWithExecutor:(id<GWSystemCommandExecutor>)executor;
 
 @property (readonly, strong) id<GWSystemCommandExecutor> executor;
+@property (readonly) NSString *capturedErrorOutput;
 
 @end

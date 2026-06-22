@@ -30,6 +30,12 @@ typedef NS_ENUM(NSInteger, GWPackageManagerError) {
 
 @protocol GWInstallProgressHandler <NSObject>
 - (void)installDidProgress:(float)progress message:(NSString *)message;
+
+@optional
+/// Called for each line of stderr output produced by the underlying package
+/// manager tool.  Lines are delivered as the command runs.  Implementors
+/// should dispatch to the main queue before updating UI.
+- (void)installDidOutputLine:(NSString *)line;
 @end
 
 #pragma mark - GWPackageManager Interface
@@ -73,6 +79,11 @@ typedef NS_ENUM(NSInteger, GWPackageManagerError) {
 - (instancetype)initWithBackend:(id<GWPackageManagerBackend>)backend;
 
 @property (readonly, strong) id<GWPackageManagerBackend> backend;
+
+/// Full stderr output from the most recent backend command, suitable for
+/// display in a "Details" disclosure area.  Valid after install/uninstall
+/// operations complete.
+@property (readonly, nullable) NSString *capturedErrorOutput;
 
 // --- User-friendly error descriptions ---
 // Converts a GWPackageManager error into a non-technical message suitable

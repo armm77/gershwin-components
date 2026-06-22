@@ -19,6 +19,7 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
 @implementation GWFreeBSDBackend
 
 @synthesize backendName = _backendName;
+@synthesize capturedErrorOutput = _capturedErrorOutput;
 
 #pragma mark - Initialization
 
@@ -50,13 +51,22 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
 {
   NSLog(@"GWFreeBSDBackend -> installPackages: %@ (local: %@)", packageNames, filePaths);
   [progressHandler installDidProgress:0.0f message:@"Preparing..."];
+  _capturedErrorOutput = @"";
 
   // Install local packages first
   if ([filePaths count] > 0) {
     NSMutableArray *args = [NSMutableArray arrayWithArray:@[@"-A", @"-E", kPkgPath, @"add", @"-f"]];
     [args addObjectsFromArray:filePaths];
 
-    int status = [_executor execute:kSudoPath arguments:args];
+    NSString *stderr = nil;
+    int status = [_executor execute:kSudoPath
+                          arguments:args
+                    stderrCallback:^(NSString *line) {
+                      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                        [progressHandler installDidOutputLine:line];
+                    }
+              capturedErrorOutput:&stderr];
+    _capturedErrorOutput = stderr ?: @"";
     if (status != 0) {
       if (error) {
         *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
@@ -78,7 +88,16 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     [args addObjectsFromArray:packageNames];
 
     NSLog(@"GWFreeBSDBackend -> pkg install -y %@", packageNames);
-    int status = [_executor execute:kSudoPath arguments:args];
+    NSString *stderr = nil;
+    int status = [_executor execute:kSudoPath
+                          arguments:args
+                    stderrCallback:^(NSString *line) {
+                      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                        [progressHandler installDidOutputLine:line];
+                    }
+              capturedErrorOutput:&stderr];
+    if (stderr)
+      _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:stderr];
     NSLog(@"GWFreeBSDBackend <- pkg exit code: %d", status);
     if (status != 0) {
       if (error) {

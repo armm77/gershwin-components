@@ -31,4 +31,10 @@
 - (NSArray<NSString *> *)filesForPackage:(NSString *)name error:(NSError **)error;
 - (NSString *)packageOwningFile:(NSString *)path error:(NSError **)error;
 
+@optional
+/// Full stderr output from the most recent backend command, suitable for
+/// display in a "Details" disclosure area.  Set during installPackages:
+/// and uninstallPackages:; valid after those methods return.
+@property (readonly) NSString *capturedErrorOutput;
+
 @end

@@ -19,6 +19,7 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
 @implementation GWArchBackend
 
 @synthesize backendName = _backendName;
+@synthesize capturedErrorOutput = _capturedErrorOutput;
 
 #pragma mark - Initialization
 
@@ -49,13 +50,22 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
                   error:(NSError **)error
 {
   [progressHandler installDidProgress:0.0f message:@"Preparing..."];
+  _capturedErrorOutput = @"";
 
   // Install local .pkg.tar files first
   if ([filePaths count] > 0) {
     NSMutableArray *args = [NSMutableArray arrayWithArray:@[@"-A", @"-E", kPacmanPath, @"-U", @"--noconfirm"]];
     [args addObjectsFromArray:filePaths];
 
-    int status = [_executor execute:kSudoPath arguments:args];
+    NSString *stderr = nil;
+    int status = [_executor execute:kSudoPath
+                          arguments:args
+                    stderrCallback:^(NSString *line) {
+                      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                        [progressHandler installDidOutputLine:line];
+                    }
+              capturedErrorOutput:&stderr];
+    _capturedErrorOutput = stderr ?: @"";
     if (status != 0) {
       if (error) {
         *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
@@ -77,7 +87,16 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     [args addObjectsFromArray:packageNames];
 
     NSLog(@"GWArchBackend -> pacman -S --noconfirm %@", packageNames);
-    int status = [_executor execute:kSudoPath arguments:args];
+    NSString *stderr = nil;
+    int status = [_executor execute:kSudoPath
+                          arguments:args
+                    stderrCallback:^(NSString *line) {
+                      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                        [progressHandler installDidOutputLine:line];
+                    }
+              capturedErrorOutput:&stderr];
+    if (stderr)
+      _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:stderr];
     NSLog(@"GWArchBackend <- pacman exit code: %d", status);
     if (status != 0) {
       if (error) {

@@ -15,6 +15,10 @@
 #pragma mark - GWArchBackend Interface
 
 @interface GWArchBackend : NSObject <GWPackageManagerBackend>
+{
+@private
+  NSString *_capturedErrorOutput;
+}
 
 - (instancetype)initWithExecutor:(id<GWSystemCommandExecutor>)executor;
 

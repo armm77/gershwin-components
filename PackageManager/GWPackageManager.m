@@ -443,4 +443,13 @@ static GWPackageManager *sharedManager = nil;
     }
 }
 
+#pragma mark - Captured Output
+
+- (NSString *)capturedErrorOutput
+{
+  if ([_backend respondsToSelector:@selector(capturedErrorOutput)])
+    return [_backend capturedErrorOutput];
+  return nil;
+}
+
 @end

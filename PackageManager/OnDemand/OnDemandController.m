@@ -254,11 +254,19 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
   [_descriptionField setHidden:YES];
   [_installButton setHidden:YES];
 
+  // Make the window taller to accommodate the details disclosure section
+  CGFloat kDetailsExtra = 160.0;
+  NSRect wf = [_window frame];
+  wf.origin.y -= kDetailsExtra;
+  wf.size.height += kDetailsExtra;
+  [_window setFrame:wf display:YES animate:YES];
+
   // Create progress UI lazily
   CGFloat cx = kSideMargin;
   CGFloat contentW = kWinWidth - 2 * kSideMargin;
   CGFloat progY  = kBottomMargin + kBtnHeight + kSpace16;  // 56
   CGFloat statY  = progY + kBarHeight + kSpace8;           // 84
+  CGFloat btnRight = kWinWidth - kSideMargin;
 
   _progressBar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(kTextLeft, progY, contentW - kTextLeft + cx, kBarHeight)];
   [_progressBar setStyle:NSProgressIndicatorBarStyle];
@@ -277,8 +285,41 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
   [_statusField setAlignment:NSTextAlignmentLeft];
   [[_window contentView] addSubview:_statusField];
 
+  // ── Details disclosure section ──
+  CGFloat detailsY = statY + kLineHeight + kSpace8;        // 110
+  _detailsVisible = NO;
+
+  _detailsToggle = [[NSButton alloc] initWithFrame:NSMakeRect(kTextLeft, detailsY, 160.0, kLineHeight)];
+  [_detailsToggle setTitle:@"  ▶  Details"];
+  [_detailsToggle setTarget:self];
+  [_detailsToggle setAction:@selector(detailsToggled:)];
+  [_detailsToggle setBordered:NO];
+  [[_detailsToggle cell] setFont:[NSFont systemFontOfSize:11.0]];
+  [[_detailsToggle cell] setHighlightsBy:NSContentsCellMask];
+  [[_window contentView] addSubview:_detailsToggle];
+
+  // Details text view (hidden initially) — 150pt tall, full width from kTextLeft
+  CGFloat detailsTextY = detailsY + kLineHeight + 2.0;
+  CGFloat detailsTextH = 120.0;
+  NSRect tvFrame = NSMakeRect(kTextLeft, detailsTextY, contentW - kTextLeft + cx, detailsTextH);
+
+  _detailsTextView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, tvFrame.size.width, tvFrame.size.height)];
+  [_detailsTextView setEditable:NO];
+  [_detailsTextView setSelectable:YES];
+  [_detailsTextView setFont:[NSFont userFixedPitchFontOfSize:10.0]];
+  [_detailsTextView setTextColor:[NSColor colorWithCalibratedWhite:0.22 alpha:1.0]];
+  [_detailsTextView setBackgroundColor:[NSColor colorWithCalibratedWhite:0.95 alpha:1.0]];
+  [_detailsTextView setAutoresizingMask:NSViewWidthSizable];
+
+  _detailsScrollView = [[NSScrollView alloc] initWithFrame:tvFrame];
+  [_detailsScrollView setDocumentView:_detailsTextView];
+  [_detailsScrollView setHasVerticalScroller:YES];
+  [_detailsScrollView setAutoresizingMask:NSViewWidthSizable];
+  [_detailsScrollView setBorderType:NSBezelBorder];
+  [_detailsScrollView setHidden:YES];
+  [[_window contentView] addSubview:_detailsScrollView];
+
   // Cancel button in lower-right (matching Download button position from confirmation state)
-  CGFloat btnRight = kWinWidth - kSideMargin;
   [_cancelButton setFrameOrigin:NSMakePoint(
     btnRight - kBtnWide, kBottomMargin)];
 
@@ -465,6 +506,7 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
     dispatch_async(dispatch_get_main_queue(), ^{
       if (!success)
         {
+          [self _populateDetailsFromBackend];
           NSString *msg = [GWPackageManager friendlyErrorMessageForError:error
                                                                   appName:_appName];
           NSLog(@"OnDemand [FAIL] [Step 1/2] Download FAILED: %@", msg);
@@ -482,6 +524,7 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
         }
 
       NSLog(@"OnDemand [OK] [Step 1/2] Download succeeded");
+      [self _populateDetailsFromBackend];
       [_progressBar setDoubleValue:1.0];
 
       // Execute the command (inherits stdio, passes through exit code)
@@ -516,6 +559,31 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
         }
     });
   });
+}
+
+#pragma mark - Captured Output (Details)
+
+/// Populate the details text view from the backend's capturedErrorOutput
+/// if it hasn't already been populated via live installDidOutputLine: calls.
+- (void)_populateDetailsFromBackend
+{
+  if (!_detailsTextView || !_pm) return;
+
+  // Only append if the text view is still empty; live callbacks may have
+  // already populated it during command execution.
+  if ([[_detailsTextView string] length] > 0) return;
+
+  NSString *output = [_pm capturedErrorOutput];
+  if ([output length] == 0) return;
+
+  NSAttributedString *as = [[NSAttributedString alloc]
+                             initWithString:output
+                                 attributes:@{ NSFontAttributeName:
+                                   [NSFont userFixedPitchFontOfSize:10.0] }];
+  [[_detailsTextView textStorage] appendAttributedString:as];
+
+  NSRange endRange = NSMakeRange([output length], 0);
+  [_detailsTextView scrollRangeToVisible:endRange];
 }
 
 #pragma mark - Error Display
@@ -554,6 +622,46 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
   if (_isTerminating) return;
   _isTerminating = YES;
   [NSApp terminate:nil];
+}
+
+#pragma mark - Details Disclosure
+
+- (void)detailsToggled:(id)sender
+{
+  _detailsVisible = !_detailsVisible;
+  [_detailsScrollView setHidden:!_detailsVisible];
+  NSString *arrow = _detailsVisible ? @"  ▼" : @"  ▶";
+  [_detailsToggle setTitle:[NSString stringWithFormat:@"%@  Details", arrow]];
+
+  // Scroll to bottom on reveal
+  if (_detailsVisible && _detailsTextView)
+    {
+      NSRange endRange = NSMakeRange([[_detailsTextView string] length], 0);
+      [_detailsTextView scrollRangeToVisible:endRange];
+    }
+}
+
+#pragma mark - Live Output from Backend
+
+- (void)installDidOutputLine:(NSString *)line
+{
+  if (!line) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!_detailsTextView) return;
+
+    NSAttributedString *as = [[NSAttributedString alloc]
+                               initWithString:[line stringByAppendingString:@"\n"]
+                                   attributes:@{ NSFontAttributeName:
+                                     [NSFont userFixedPitchFontOfSize:10.0] }];
+    [[_detailsTextView textStorage] appendAttributedString:as];
+
+    // Auto-scroll if the details section is visible
+    if (_detailsVisible)
+      {
+        NSRange endRange = NSMakeRange([[_detailsTextView string] length], 0);
+        [_detailsTextView scrollRangeToVisible:endRange];
+      }
+  });
 }
 
 #pragma mark - NSApplicationDelegate
