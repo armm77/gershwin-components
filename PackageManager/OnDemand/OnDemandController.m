@@ -607,17 +607,16 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
   [_detailsToggle setTitle:[NSString stringWithFormat:@"%@  Details", arrow]];
 
   CGFloat contentW = kWinWidth - 2 * kSideMargin;
+  // The window grows/shrinks by this much at the bottom
+  CGFloat growBy = kDetailsTextH + kSpace8 + kBottomMargin;
 
   if (_detailsVisible)
     {
-      // Lazily create the details text view
+      // ── 1. Lazily create the details text view ──
       if (!_detailsTextView)
         {
-          CGFloat tvW = contentW;
-          CGFloat tvY = kSpace8;   // sits above absolute bottom, below button row
-
           _detailsTextView = [[NSTextView alloc]
-                               initWithFrame:NSMakeRect(0, 0, tvW, kDetailsTextH)];
+                               initWithFrame:NSMakeRect(0, 0, contentW, kDetailsTextH)];
           [_detailsTextView setEditable:NO];
           [_detailsTextView setSelectable:YES];
           [_detailsTextView setFont:[NSFont userFixedPitchFontOfSize:10.0]];
@@ -626,30 +625,38 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
           [_detailsTextView setAutoresizingMask:NSViewWidthSizable];
 
           _detailsScrollView = [[NSScrollView alloc]
-                                 initWithFrame:NSMakeRect(kSideMargin, tvY, tvW, kDetailsTextH)];
+                                 initWithFrame:NSMakeRect(kSideMargin, kSpace8,
+                                                          contentW, kDetailsTextH)];
           [_detailsScrollView setDocumentView:_detailsTextView];
           [_detailsScrollView setHasVerticalScroller:YES];
           [_detailsScrollView setAutoresizingMask:NSViewWidthSizable];
           [_detailsScrollView setBorderType:NSBezelBorder];
-          // Insert at back so the button row stays on top visually
+          [_detailsScrollView setHidden:YES];
           [[_window contentView] addSubview:_detailsScrollView
-                                 positioned:NSWindowBelow
-                                 relativeTo:nil];
-          // Populate with any output captured before the view was created
+                                 positioned:NSWindowBelow relativeTo:nil];
           [self _populateDetailsFromBackend];
         }
 
-      [_detailsScrollView setHidden:NO];
-
-      // Grow the window downward — top stays fixed
-      CGFloat growBy = kDetailsTextH + kSpace8 + kBottomMargin;
+      // ── 2. Grow the window first (display:NO to avoid intermediate draw) ──
       NSRect frame = [_window frame];
       frame.origin.y -= growBy;
       frame.size.height += growBy;
-      [_window setFrame:frame display:YES animate:YES];
+      [_window setFrame:frame display:NO];
 
-      // Layout the text view in the new bottom area
-      [_detailsScrollView setFrame:NSMakeRect(kSideMargin, kSpace8, contentW, kDetailsTextH)];
+      // ── 3. Now shift everything so controls stay at the same screen position
+      //       and the text view sits at the very bottom (below everything) ──
+      for (NSView *v in [[_window contentView] subviews])
+        {
+          if (v == _detailsScrollView) continue;
+          NSRect f = [v frame];
+          f.origin.y += growBy;
+          [v setFrame:f];
+        }
+
+      [_detailsScrollView setFrame:NSMakeRect(kSideMargin, kSpace8,
+                                               contentW, kDetailsTextH)];
+      [_detailsScrollView setHidden:NO];
+      [[_window contentView] setNeedsDisplay:YES];
 
       // Scroll to bottom
       NSRange end = NSMakeRange([[_detailsTextView string] length], 0);
@@ -657,14 +664,23 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
     }
   else
     {
-      // Shrink the window back — top stays fixed
-      CGFloat growBy = kDetailsTextH + kSpace8 + kBottomMargin;
+      // ── 1. Shrink and shift atomically ──
       NSRect frame = [_window frame];
       frame.origin.y += growBy;
       frame.size.height -= growBy;
-      [_window setFrame:frame display:YES animate:YES];
+      [_window setFrame:frame display:NO];
+
+      // Shift controls back down
+      for (NSView *v in [[_window contentView] subviews])
+        {
+          if (v == _detailsScrollView) continue;
+          NSRect f = [v frame];
+          f.origin.y -= growBy;
+          [v setFrame:f];
+        }
 
       [_detailsScrollView setHidden:YES];
+      [[_window contentView] setNeedsDisplay:YES];
     }
 }
 
