@@ -637,14 +637,13 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
           [self _populateDetailsFromBackend];
         }
 
-      // ── 2. Grow the window first (display:NO to avoid intermediate draw) ──
+      // ── 2. Grow the window downward — bottom edge extends, top stays fixed ──
       NSRect frame = [_window frame];
       frame.origin.y -= growBy;
       frame.size.height += growBy;
-      [_window setFrame:frame display:NO];
+      [_window setFrame:frame display:YES];
 
-      // ── 3. Now shift everything so controls stay at the same screen position
-      //       and the text view sits at the very bottom (below everything) ──
+      // ── 3. Shift everything up so controls stay at the same screen position ──
       for (NSView *v in [[_window contentView] subviews])
         {
           if (v == _detailsScrollView) continue;
@@ -664,13 +663,13 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
     }
   else
     {
-      // ── 1. Shrink and shift atomically ──
+      // ── 1. Shrink the window back up — bottom edge rises, top stays fixed ──
       NSRect frame = [_window frame];
       frame.origin.y += growBy;
       frame.size.height -= growBy;
-      [_window setFrame:frame display:NO];
+      [_window setFrame:frame display:YES];
 
-      // Shift controls back down
+      // Shift controls back down to original positions
       for (NSView *v in [[_window contentView] subviews])
         {
           if (v == _detailsScrollView) continue;
