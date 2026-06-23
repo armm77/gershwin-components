@@ -25,6 +25,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import "LoginWindowPAM.h"
+#import "AppearanceMetrics.h"
 
 @interface LoginWindow : NSObject <NSTextFieldDelegate, NSWindowDelegate>
 {

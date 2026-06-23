@@ -604,14 +604,14 @@ void signalHandler(int sig) {
     [statusLabel setSelectable:NO];
     [contentView addSubview:statusLabel];
 
-    // Button layout with standard spacing
-    CGFloat buttonWidth = 80;
-    CGFloat buttonHeight = 24; // Standard button height
-    CGFloat buttonSpacing = 12; // Standard button spacing
-    CGFloat bottomMargin = 20; // Standard bottom margin  
-    CGFloat leftX = 24; // Standard left margin
+    // Button layout conforming to AppearanceMetrics.h HIG values
+    CGFloat buttonWidth = METRICS_BUTTON_MIN_WIDTH;
+    CGFloat buttonHeight = METRICS_BUTTON_HEIGHT;
+    CGFloat buttonSpacing = METRICS_BUTTON_HORIZ_INTERSPACE;
+    CGFloat bottomMargin = METRICS_CONTENT_BOTTOM_MARGIN;
+    CGFloat leftX = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat buttonY = bottomMargin;
-    CGFloat rightX = windowFrame.size.width - buttonWidth - 24; // Standard right margin
+    CGFloat rightX = windowFrame.size.width - buttonWidth - METRICS_CONTENT_SIDE_MARGIN;
 
     shutdownButton = [[NSButton alloc] initWithFrame:NSMakeRect(leftX, buttonY, buttonWidth, buttonHeight)];
     [shutdownButton setTitle:@"Shut Down"];
@@ -682,19 +682,24 @@ void signalHandler(int sig) {
     } else {
         NSDebugLLog(@"gwcomp", @"[DEBUG] authenticateUser:password: returned NO");
         [self showStatus:@"Authentication failed"];
-        
+
         // Show detailed error message if available
         NSString *errorMsg = [pamAuth lastErrorMessage];
         if (errorMsg && [errorMsg length] > 0) {
-            NSDebugLLog(@"gwcomp", @"[ERROR] Showing PAM error to user: %@", errorMsg);
-            NSAlert *alert = [NSAlert alertWithMessageText:@"Authentication Error"
-                                             defaultButton:@"OK"
-                                           alternateButton:nil
-                                               otherButton:nil
-                                 informativeTextWithFormat:@"%@", errorMsg];
-            [alert runModal];
+            // "Authentication failure" means wrong password — just shake, no dialog
+            if ([errorMsg rangeOfString:@"Authentication failure" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                NSDebugLLog(@"gwcomp", @"[DEBUG] Authentication failure (wrong password) — shaking only");
+            } else {
+                NSDebugLLog(@"gwcomp", @"[ERROR] Showing PAM error to user: %@", errorMsg);
+                NSAlert *alert = [NSAlert alertWithMessageText:@"Authentication Error"
+                                                 defaultButton:@"OK"
+                                               alternateButton:nil
+                                                   otherButton:nil
+                                     informativeTextWithFormat:@"%@", errorMsg];
+                [alert runModal];
+            }
         }
-        
+
         [self shakeWindow];
         [passwordField setStringValue:@""];
         [loginWindow makeFirstResponder:passwordField];
