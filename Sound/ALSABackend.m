@@ -220,26 +220,26 @@ static NSString *const kMicControl = @"Mic";
     // card 0: Audio [Bose USB Audio], device 0: USB Audio [USB Audio]
     //   Subdevices: 1/1
     //   Subdevice #0: subdevice #0
-    
+
     NSArray *lines = [output componentsSeparatedByString:@"\n"];
-    
+
     for (NSString *line in lines) {
         if ([line hasPrefix:@"card "]) {
             AudioDevice *device = [[AudioDevice alloc] init];
             device.direction = AudioDeviceDirectionOutput;
             device.state = AudioDeviceStateAvailable;
-            
+
             // Parse card number
             NSScanner *scanner = [NSScanner scannerWithString:line];
             [scanner scanString:@"card " intoString:nil];
             int cardNum = 0;
             [scanner scanInt:&cardNum];
             device.cardIndex = cardNum;
-            
+
             // Parse card name (between first [ and ])
             NSRange openBracket = [line rangeOfString:@"["];
             NSRange closeBracket = [line rangeOfString:@"]"];
-            if (openBracket.location != NSNotFound && 
+            if (openBracket.location != NSNotFound &&
                 closeBracket.location != NSNotFound &&
                 closeBracket.location > openBracket.location) {
                 NSRange nameRange = NSMakeRange(openBracket.location + 1,
@@ -247,7 +247,7 @@ static NSString *const kMicControl = @"Mic";
                 device.cardName = [line substringWithRange:nameRange];
                 device.displayName = device.cardName;
             }
-            
+
             // Parse device number
             NSRange deviceRange = [line rangeOfString:@"device "];
             if (deviceRange.location != NSNotFound) {
@@ -255,24 +255,35 @@ static NSString *const kMicControl = @"Mic";
                                        NSMaxRange(deviceRange)];
                 device.deviceIndex = [devicePart intValue];
             }
-            
+
             // Create identifier
-            device.identifier = [NSString stringWithFormat:@"hw:%d,%d", 
+            device.identifier = [NSString stringWithFormat:@"hw:%d,%d",
                                 cardNum, device.deviceIndex];
             device.name = device.identifier;
-            
+
+            // Probe device to verify it's actually attached and usable.
+            // aplay -l lists all cards registered by kernel drivers, but
+            // some (e.g., HDMI without a connected display) fail to open.
+            if (![self isOutputDeviceUsable:device]) {
+                NSDebugLLog(@"gwcomp",
+                    @"Skipping unusable output device %@ (%@) — probe failed",
+                    device.displayName, device.identifier);
+                [device release];
+                continue;
+            }
+
             // Guess device type from name
-            device.type = [self guessDeviceType:device.displayName 
+            device.type = [self guessDeviceType:device.displayName
                                        cardName:device.cardName];
-            
+
             // Set mixer name
             device.mixerName = [NSString stringWithFormat:@"hw:%d", cardNum];
-            
+
             [cachedOutputDevices addObject:device];
             [device release];
         }
     }
-    
+
     // Set first device as default if none selected
     if ([cachedOutputDevices count] > 0 && defaultOutput == nil) {
         AudioDevice *first = [cachedOutputDevices objectAtIndex:0];
@@ -319,9 +330,19 @@ static NSString *const kMicControl = @"Mic";
                 device.deviceIndex = [devicePart intValue];
             }
             
-            device.identifier = [NSString stringWithFormat:@"hw:%d,%d", 
+            device.identifier = [NSString stringWithFormat:@"hw:%d,%d",
                                 cardNum, device.deviceIndex];
             device.name = device.identifier;
+
+            // Probe input device to verify it is actually attached
+            if (![self isInputDeviceUsable:device]) {
+                NSDebugLLog(@"gwcomp",
+                    @"Skipping unusable input device %@ (%@) — probe failed",
+                    device.displayName, device.identifier);
+                [device release];
+                continue;
+            }
+
             device.type = AudioDeviceTypeBuiltInMicrophone;
             device.mixerName = [NSString stringWithFormat:@"hw:%d", cardNum];
             
@@ -376,6 +397,91 @@ static NSString *const kMicControl = @"Mic";
     
     // Default to built-in speaker for output
     return AudioDeviceTypeBuiltInSpeaker;
+}
+
+#pragma mark - Device Probing
+
+- (BOOL)isOutputDeviceUsable:(AudioDevice *)device
+{
+    if (!aplayPath) return NO;
+
+    // Probe device by trying to open it briefly.
+    // aplay -l lists every card the kernel registered, but cards without
+    // a physically connected sink (e.g. HDMI with no display) fail at
+    // open() with "audio open error".  We run aplay silently for 1 ms
+    // and capture stderr; any error *other* than "audio open error"
+    // means the device opened successfully (the format/data mismatch is
+    // expected since /dev/zero isn't valid audio).
+
+    NSString *probeId = [NSString stringWithFormat:@"hw:%d,%d",
+                         device.cardIndex, device.deviceIndex];
+    NSString *output = [self runCommandCaptureError:aplayPath
+                                      withArguments:@[@"-D", probeId, @"-d", @"1",
+                                                      @"-q", @"/dev/zero"]];
+    if (output && [output containsString:@"audio open error"]) {
+        return NO;
+    }
+    return YES;
+}
+
+- (BOOL)isInputDeviceUsable:(AudioDevice *)device
+{
+    if (!arecordPath) return NO;
+
+    NSString *probeId = [NSString stringWithFormat:@"hw:%d,%d",
+                         device.cardIndex, device.deviceIndex];
+    NSString *output = [self runCommandCaptureError:arecordPath
+                                      withArguments:@[@"-D", probeId, @"-d", @"1",
+                                                      @"-q", @"/dev/zero"]];
+    if (output && [output containsString:@"audio open error"]) {
+        return NO;
+    }
+    return YES;
+}
+
+// Run a command and return combined stdout+stderr even if exit code is non-zero.
+- (NSString *)runCommandCaptureError:(NSString *)command
+                       withArguments:(NSArray *)args
+{
+    if (!command) return nil;
+
+    NSTask *task = [[NSTask alloc] init];
+    NSPipe *outPipe = [NSPipe pipe];
+    NSPipe *errPipe = [NSPipe pipe];
+
+    [task setLaunchPath:command];
+    [task setArguments:args];
+    [task setStandardOutput:outPipe];
+    [task setStandardError:errPipe];
+
+    @try {
+        [task launch];
+    } @catch (NSException *e) {
+        [task release];
+        return nil;
+    }
+
+    NSData *outData = [[outPipe fileHandleForReading] readDataToEndOfFile];
+    NSData *errData = [[errPipe fileHandleForReading] readDataToEndOfFile];
+    [task waitUntilExit];
+
+    NSString *outStr = [[NSString alloc] initWithData:outData
+                                             encoding:NSUTF8StringEncoding];
+    NSString *errStr = [[NSString alloc] initWithData:errData
+                                             encoding:NSUTF8StringEncoding];
+    // Prefer stderr for error messages; fall back to stdout.
+    // Retain the chosen one so releasing the other doesn't free it.
+    NSString *result;
+    if (errStr && [errStr length] > 0) {
+        result = [errStr retain];
+        [outStr release];
+    } else {
+        result = [outStr retain];
+        [errStr release];
+    }
+    [task release];
+
+    return [result autorelease];
 }
 
 - (void)updateDeviceWithMixerControls:(AudioDevice *)device 

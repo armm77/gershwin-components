@@ -101,6 +101,11 @@
 // Helper methods
 - (NSString *)runCommand:(NSString *)command withArguments:(NSArray *)args;
 - (NSString *)runCommandWithPipe:(NSString *)command arguments:(NSArray *)args;
+- (NSString *)runCommandCaptureError:(NSString *)command withArguments:(NSArray *)args;
 - (void)reportErrorWithMessage:(NSString *)message;
+
+// Device probing
+- (BOOL)isOutputDeviceUsable:(AudioDevice *)device;
+- (BOOL)isInputDeviceUsable:(AudioDevice *)device;
 
 @end
