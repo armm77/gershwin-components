@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>English</string>
+
+    <key>CFBundleExecutable</key>
+    <string>Player</string>
+
+    <key>CFBundleIconFile</key>
+    <string>Player</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>org.gershwin.Player</string>
+
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <key>CFBundleName</key>
+    <string>Player</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 Simon Peter. BSD-2-Clause License.</string>
+
+    <key>NSMainNibFile</key>
+    <string></string>
+
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <!-- GNUstep About panel keys -->
+
+    <key>ApplicationName</key>
+    <string>Player</string>
+
+    <key>ApplicationDescription</key>
+    <string>Audio and video media player for Gershwin</string>
+
+    <key>ApplicationIcon</key>
+    <string>Player</string>
+
+    <key>ApplicationRelease</key>
+    <string>r0.1</string>
+
+    <key>ApplicationVersion</key>
+    <string>v0.1</string>
+
+    <key>FullVersionID</key>
+    <string>1.0.0</string>
+
+    <key>NSAppVersion</key>
+    <string>1.0</string>
+
+    <key>NSBuildVersion</key>
+    <string>1</string>
+
+    <key>Authors</key>
+    <array>
+        <string>Simon Peter</string>
+    </array>
+
+    <key>Copyright</key>
+    <string>Copyright © 2026 Simon Peter</string>
+
+    <key>CopyrightDescription</key>
+    <string>Released under the BSD 2-Clause License.</string>
+</dict>
+</plist>

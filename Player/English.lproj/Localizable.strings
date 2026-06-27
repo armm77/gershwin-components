@@ -1,0 +1,37 @@
+/* Player Application Localizable Strings */
+
+/* Main Window */
+"Player" = "Player";
+"Open File..." = "Open File...";
+"Play / Pause" = "Play / Pause";
+"Stop" = "Stop";
+"Previous Track" = "Previous Track";
+"Next Track" = "Next Track";
+"Close Window" = "Close Window";
+"Vol:" = "Vol:";
+
+/* Status Messages */
+"Ready — open a media file to start playing" = "Ready — open a media file to start playing";
+"Loading %@..." = "Loading %@...";
+"Loaded: %@" = "Loaded: %@";
+"Video file loaded (audio playback)" = "Video file loaded (audio playback)";
+"Failed to load file" = "Failed to load file";
+
+/* Alert Messages */
+"File Not Found" = "File Not Found";
+"The file '%@' could not be found." = "The file '%@' could not be found.";
+"Failed to Load File" = "Failed to Load File";
+"Unable to play '%@': %@" = "Unable to play '%@': %@";
+
+/* Menu Items */
+"About Player" = "About Player";
+"Quit" = "Quit";
+"File" = "File";
+"Playback" = "Playback";
+"Services" = "Services";
+"Hide Player" = "Hide Player";
+"Hide Others" = "Hide Others";
+"Show All" = "Show All";
+
+/* Metadata */
+"No file loaded" = "No file loaded";

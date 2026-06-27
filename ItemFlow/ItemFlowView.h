@@ -28,4 +28,11 @@
 
 - (void)updateTexturesForIndices:(NSIndexSet *)indices;
 
+/**
+ * Resize the internal item array to count without destroying existing
+ * textures.  New entries start as zero (placeholder); trailing entries
+ * that are removed have their GL textures freed.
+ */
+- (void)setItemCount:(NSUInteger)count;
+
 @end

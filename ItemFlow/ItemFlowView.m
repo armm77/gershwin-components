@@ -604,4 +604,37 @@ static dispatch_once_t onceTokenMissingLogged;
     return YES;
 }
 
+- (void)setItemCount:(NSUInteger)count {
+    [[self openGLContext] makeCurrentContext];
+
+    NSUInteger oldCount = [_textures count];
+    if (count == oldCount) return;
+
+    if (count > oldCount) {
+        // Append placeholder entries — existing textures are untouched
+        for (NSUInteger i = oldCount; i < count; i++) {
+            [_textures addObject:@(0)];
+        }
+    } else {
+        // Remove trailing entries, freeing their GL textures
+        for (NSUInteger i = count; i < oldCount; i++) {
+            GLuint t = [_textures[i] unsignedIntValue];
+            if (t != 0) glDeleteTextures(1, &t);
+        }
+        [_textures removeObjectsInRange:NSMakeRange(count, oldCount - count)];
+    }
+
+    [self updateScrollFrame];
+
+    if (_textures.count > 0 && _targetPosition >= _textures.count) {
+        _targetPosition = (CGFloat)(_textures.count - 1);
+        _currentPosition = _targetPosition;
+    } else if (_textures.count == 0) {
+        _targetPosition = 0;
+        _currentPosition = 0;
+    }
+
+    [self setNeedsDisplay:YES];
+}
+
 @end
