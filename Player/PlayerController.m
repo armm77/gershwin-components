@@ -112,7 +112,6 @@
 @synthesize timeSlider;
 @synthesize currentTimeLabel;
 @synthesize totalTimeLabel;
-@synthesize volumeSlider;
 @synthesize titleLabel;
 @synthesize artistLabel;
 @synthesize albumLabel;
@@ -138,6 +137,9 @@
         currentIndex = -1;
         isVideo = NO;
         isFullscreen = NO;
+        srandom((unsigned int)time(NULL));
+        repeatEnabled = NO;
+        shuffleEnabled = NO;
         coverAreaHeight = 200.0;
     }
     return self;
@@ -185,9 +187,11 @@
                                                         action:NULL
                                                  keyEquivalent:@""];
     NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Player"];
-    [appMenu addItemWithTitle:@"About Player"
-                       action:@selector(orderFrontStandardAboutPanel:)
-                keyEquivalent:@""];
+    NSMenuItem *aboutItem = (NSMenuItem *)
+        [appMenu addItemWithTitle:@"About Player"
+                           action:@selector(orderFrontStandardAboutPanel:)
+                    keyEquivalent:@""];
+    [aboutItem setTarget:NSApp];
     [appMenu addItem:[NSMenuItem separatorItem]];
     [appMenu addItemWithTitle:@"Preferences..."
                        action:NULL
@@ -293,16 +297,18 @@
     [nextItem setTarget:self];
     [nextItem setKeyEquivalentModifierMask:NSCommandKeyMask];
     [playbackMenu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *volUpItem = (NSMenuItem *)
-        [playbackMenu addItemWithTitle:@"Volume Up"
-                                action:@selector(volumeUp:)
-                         keyEquivalent:@"+"];
-    [volUpItem setTarget:self];
-    NSMenuItem *volDownItem = (NSMenuItem *)
-        [playbackMenu addItemWithTitle:@"Volume Down"
-                                action:@selector(volumeDown:)
-                         keyEquivalent:@"-"];
-    [volDownItem setTarget:self];
+    repeatMenuItem = (NSMenuItem *)
+        [playbackMenu addItemWithTitle:@"Repeat"
+                                action:@selector(toggleRepeat:)
+                         keyEquivalent:@"r"];
+    [repeatMenuItem setTarget:self];
+    [repeatMenuItem setState:NSOffState];
+    shuffleMenuItem = (NSMenuItem *)
+        [playbackMenu addItemWithTitle:@"Shuffle"
+                                action:@selector(toggleShuffle:)
+                         keyEquivalent:@"s"];
+    [shuffleMenuItem setTarget:self];
+    [shuffleMenuItem setState:NSOffState];
     [playbackMenuItem setSubmenu:playbackMenu];
     [mainMenu addItem:playbackMenuItem];
     [playbackMenu release];
@@ -490,24 +496,6 @@
     [openButton setAction:@selector(openFile:)];
     [contentView addSubview:openButton];
 
-    volumeLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
-    [volumeLabel setStringValue:@"Volume:"];
-    [volumeLabel setEditable:NO];
-    [volumeLabel setSelectable:NO];
-    [volumeLabel setBezeled:NO];
-    [volumeLabel setDrawsBackground:NO];
-    [volumeLabel setFont:METRICS_FONT_SYSTEM_REGULAR_11];
-    [contentView addSubview:volumeLabel];
-
-    volumeSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
-    [volumeSlider setMinValue:0.0];
-    [volumeSlider setMaxValue:1.0];
-    [volumeSlider setDoubleValue:0.8];
-    [volumeSlider setContinuous:YES];
-    [volumeSlider setTarget:self];
-    [volumeSlider setAction:@selector(changeVolume:)];
-    [contentView addSubview:volumeSlider];
-
     fullscreenButton = [[NSButton alloc] initWithFrame:NSZeroRect];
     [fullscreenButton setImage:[self iconFullscreen]];
     [fullscreenButton setImagePosition:NSImageOnly];
@@ -682,8 +670,6 @@
     [stopButton setHidden:NO];
     [nextButton setHidden:NO];
     [openButton setHidden:NO];
-    [volumeLabel setHidden:NO];
-    [volumeSlider setHidden:NO];
     [fullscreenButton setHidden:NO];
     [titleLabel setHidden:NO];
     [artistLabel setHidden:NO];
@@ -752,30 +738,18 @@
     [nextButton setFrame:NSMakeRect(ctrlStartX + 3 * (btnW + gap), y, btnW, btnH)];
     y -= btnH;
 
-    // ---- Bottom row: Open, Volume, Fullscreen ----
+    // ---- Bottom row: Open, Fullscreen ----
     y -= 8;
     CGFloat openW = 68.0;
-    CGFloat volLabelW = 50.0;
-    CGFloat volSliderW = 90.0;
     CGFloat fsBtnW = 28.0;
 
     [openButton setFrame:NSMakeRect(margin, y, openW, btnH)];
     [openButton setAutoresizingMask:NSViewMaxXMargin];
 
+    // Fullscreen button on the right
     CGFloat rightEdge = W - margin;
     [fullscreenButton setFrame:NSMakeRect(rightEdge - fsBtnW, y, fsBtnW, btnH)];
     [fullscreenButton setAutoresizingMask:NSViewMinXMargin];
-
-    CGFloat volStartX = margin + openW + 8;
-    CGFloat volAvailW = (rightEdge - fsBtnW) - volStartX - 8;
-    CGFloat volW = MIN(volSliderW, volAvailW - volLabelW - 8);
-    if (volW < 40.0) volW = 40.0;
-
-    [volumeLabel setFrame:NSMakeRect(volStartX, y + 3, volLabelW, 14)];
-    [volumeLabel setAutoresizingMask:NSViewWidthSizable | NSViewMaxXMargin];
-
-    [volumeSlider setFrame:NSMakeRect(volStartX + volLabelW + 4, y + 3, volW, 14)];
-    [volumeSlider setAutoresizingMask:NSViewWidthSizable];
 
     // Hide overlay if in normal mode
     if (overlayBar && ![overlayBar isHidden]) {
@@ -812,8 +786,6 @@
     [stopButton setHidden:YES];
     [nextButton setHidden:YES];
     [openButton setHidden:YES];
-    [volumeLabel setHidden:YES];
-    [volumeSlider setHidden:YES];
     [fullscreenButton setHidden:YES];
     [titleLabel setHidden:YES];
     [artistLabel setHidden:YES];
@@ -880,13 +852,6 @@
     [totalTimeLabel setHidden:NO];
     [totalTimeLabel setFrame:NSMakeRect(sliderBarMargin + timeLabelW + 4 + sliderW + 4,
                                         barH - 14 - 4, timeLabelW, 14)];
-
-    // Volume slider (left side)
-    [volumeLabel setHidden:NO];
-    [volumeLabel setFrame:NSMakeRect(margin + 40, (barH - 14) / 2.0 + 8, 16, 14)];
-    [volumeSlider setHidden:NO];
-    [volumeSlider setFrame:NSMakeRect(margin + 40 + 18, (barH - 14) / 2.0 + 8,
-                                      80, 14)];
 
     // Mouse tracking for auto-hide of overlay
     [self showOverlay];
@@ -1098,16 +1063,44 @@
 - (IBAction)previousTrack:(id)sender
 {
     if ([playlist count] == 0) return;
-    int newIndex = currentIndex - 1;
-    if (newIndex < 0) newIndex = (int)[playlist count] - 1;
+
+    int newIndex;
+    if (shuffleEnabled) {
+        // Pick a random track (different from current)
+        if ([playlist count] == 1) {
+            newIndex = 0;
+        } else {
+            do {
+                newIndex = random() % (int)[playlist count];
+            } while (newIndex == currentIndex);
+        }
+    } else {
+        newIndex = currentIndex - 1;
+        if (newIndex < 0)
+            newIndex = (repeatEnabled) ? (int)[playlist count] - 1 : 0;
+    }
     [self playFromPlaylistAtIndex:newIndex];
 }
 
 - (IBAction)nextTrack:(id)sender
 {
     if ([playlist count] == 0) return;
-    int newIndex = currentIndex + 1;
-    if (newIndex >= (int)[playlist count]) newIndex = 0;
+
+    int newIndex;
+    if (shuffleEnabled) {
+        // Pick a random track (different from current)
+        if ([playlist count] == 1) {
+            newIndex = 0;
+        } else {
+            do {
+                newIndex = random() % (int)[playlist count];
+            } while (newIndex == currentIndex);
+        }
+    } else {
+        newIndex = currentIndex + 1;
+        if (newIndex >= (int)[playlist count])
+            newIndex = (repeatEnabled) ? 0 : (int)[playlist count] - 1;
+    }
     [self playFromPlaylistAtIndex:newIndex];
 }
 
@@ -1126,53 +1119,31 @@
             [avPlayer seekToTime:seekTime];
         }
     } else if (audioPlayer) {
-        // Re-create player at new position (AVAudioPlayer has no seek)
-        if (currentFilePath) {
-            [audioPlayer stop];
-            [audioPlayer release];
-            audioPlayer = nil;
-
-            NSURL *url = [NSURL fileURLWithPath:currentFilePath];
-            audioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:NULL];
-            if (audioPlayer) {
-                [audioPlayer setVolume:[volumeSlider doubleValue]];
-                [audioPlayer play];
-                playbackState = PlayerPlaybackStatePlaying;
-                [playButton setImage:[self iconPause]];
-                if (!playbackTimer) {
-                    playbackTimer = [[NSTimer scheduledTimerWithTimeInterval:0.1
-                                                                      target:self
-                                                                    selector:@selector(playbackTimerFired:)
-                                                                    userInfo:nil
-                                                                     repeats:YES] retain];
-                }
+        // Seek using NSSound's setCurrentTime: on the underlying sound object
+        NSSound *sound = [audioPlayer valueForKey:@"sound"];
+        if (sound && [sound respondsToSelector:@selector(setCurrentTime:)]) {
+            // Get duration to calculate target time from percentage
+            NSTimeInterval dur = [sound duration];
+            if (dur > 0) {
+                NSTimeInterval targetTime = percentage * dur;
+                [sound setCurrentTime:targetTime];
             }
         }
     }
 }
 
-- (IBAction)changeVolume:(id)sender
+- (IBAction)toggleRepeat:(id)sender
 {
-    float volume = [volumeSlider doubleValue];
-    if (audioPlayer) {
-        [audioPlayer setVolume:volume];
-    }
+    repeatEnabled = !repeatEnabled;
+    [repeatMenuItem setState:repeatEnabled ? NSOnState : NSOffState];
+    [self updateStatus:repeatEnabled ? @"Repeat on" : @"Repeat off"];
 }
 
-- (IBAction)volumeUp:(id)sender
+- (IBAction)toggleShuffle:(id)sender
 {
-    float vol = [volumeSlider doubleValue] + 0.1;
-    if (vol > 1.0) vol = 1.0;
-    [volumeSlider setDoubleValue:vol];
-    [self changeVolume:volumeSlider];
-}
-
-- (IBAction)volumeDown:(id)sender
-{
-    float vol = [volumeSlider doubleValue] - 0.1;
-    if (vol < 0.0) vol = 0.0;
-    [volumeSlider setDoubleValue:vol];
-    [self changeVolume:volumeSlider];
+    shuffleEnabled = !shuffleEnabled;
+    [shuffleMenuItem setState:shuffleEnabled ? NSOnState : NSOffState];
+    [self updateStatus:shuffleEnabled ? @"Shuffle on" : @"Shuffle off"];
 }
 
 #pragma mark - Playback Control
@@ -1246,7 +1217,7 @@
             return;
         }
 
-        [audioPlayer setVolume:[volumeSlider doubleValue]];
+        [audioPlayer setVolume:0.8];
     }
 
     [self updateMetadata];
@@ -1631,10 +1602,16 @@
         if (![audioPlayer isPlaying] && playbackState == PlayerPlaybackStatePlaying) {
             [self stopPlayback];
             if ([playlist count] > 1) {
-                int nextIdx = currentIndex + 1;
-                if (nextIdx < (int)[playlist count]) {
-                    [self playFromPlaylistAtIndex:nextIdx];
+                if (repeatEnabled || shuffleEnabled) {
+                    [self nextTrack:self];
+                } else {
+                    int nextIdx = currentIndex + 1;
+                    if (nextIdx < (int)[playlist count]) {
+                        [self playFromPlaylistAtIndex:nextIdx];
+                    }
                 }
+            } else if (repeatEnabled && [playlist count] == 1) {
+                [self playFromPlaylistAtIndex:0];
             }
         }
     }

@@ -37,8 +37,6 @@ typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
     NSSlider *timeSlider;
     NSTextField *currentTimeLabel;
     NSTextField *totalTimeLabel;
-    NSSlider *volumeSlider;
-    NSTextField *volumeLabel;
     NSButton *fullscreenButton;
 
     // Overlay control bar (fullscreen)
@@ -70,6 +68,12 @@ typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
     // Playlist support
     NSMutableArray *playlist;
     int currentIndex;
+    BOOL repeatEnabled;
+    BOOL shuffleEnabled;
+
+    // Menu items (to update checkmarks)
+    NSMenuItem *repeatMenuItem;
+    NSMenuItem *shuffleMenuItem;
 
     // Cover art cache
     NSMutableDictionary *coverImages;
@@ -88,7 +92,6 @@ typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
 @property (retain) NSSlider *timeSlider;
 @property (retain) NSTextField *currentTimeLabel;
 @property (retain) NSTextField *totalTimeLabel;
-@property (retain) NSSlider *volumeSlider;
 @property (retain) NSTextField *titleLabel;
 @property (retain) NSTextField *artistLabel;
 @property (retain) NSTextField *albumLabel;
@@ -118,12 +121,11 @@ typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
 - (IBAction)previousTrack:(id)sender;
 - (IBAction)nextTrack:(id)sender;
 - (IBAction)seekToTime:(id)sender;
-- (IBAction)changeVolume:(id)sender;
 
 // View actions
 - (IBAction)toggleFullscreen:(id)sender;
-- (IBAction)volumeUp:(id)sender;
-- (IBAction)volumeDown:(id)sender;
+- (IBAction)toggleRepeat:(id)sender;
+- (IBAction)toggleShuffle:(id)sender;
 
 // Playback control
 - (void)loadFile:(NSString *)filePath;
