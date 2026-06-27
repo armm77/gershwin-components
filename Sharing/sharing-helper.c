@@ -144,12 +144,30 @@ static void cmd_set_hostname(const char *hostname)
     exit(0);
 }
 
-/* Check if a binary exists in PATH using POSIX command -v for portability */
+/* Check if a binary exists in PATH using POSIX command -v for portability.
+ * Falls back to checking common paths in case PATH is minimal
+ * (e.g., GUI apps on some BSD systems). */
 static int binary_exists(const char *name)
 {
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "command -v %s >/dev/null 2>&1", name);
-    return (system(cmd) == 0);
+    if (system(cmd) == 0) {
+        return 1;
+    }
+    /* Fallback: check common directories directly */
+    const char *prefixes[] = {
+        "/usr/bin/", "/usr/sbin/",
+        "/usr/local/bin/", "/usr/local/sbin/",
+        "/bin/", "/sbin/", NULL
+    };
+    char path[512];
+    for (int i = 0; prefixes[i] != NULL; i++) {
+        snprintf(path, sizeof(path), "%s%s", prefixes[i], name);
+        if (access(path, X_OK) == 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* Check if SFTP subsystem is configured in sshd_config (shared helper) */
@@ -207,12 +225,14 @@ static int check_service_running(const char *service)
     
 #elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD)
     char cmd[256];
-    snprintf(cmd, sizeof(cmd), "service %s status >/dev/null 2>&1", service);
+    /* Use full path to avoid PATH issues in GUI context */
+    snprintf(cmd, sizeof(cmd), "/usr/sbin/service %s status >/dev/null 2>&1", service);
     return (system(cmd) == 0);
-    
+
 #elif defined(PLATFORM_OPENBSD)
     char cmd[256];
-    snprintf(cmd, sizeof(cmd), "rcctl check %s >/dev/null 2>&1", service);
+    /* Use full path to avoid PATH issues in GUI context */
+    snprintf(cmd, sizeof(cmd), "/usr/sbin/rcctl check %s >/dev/null 2>&1", service);
     return (system(cmd) == 0);
 #endif
     return 0;
