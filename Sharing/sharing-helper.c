@@ -144,6 +144,45 @@ static void cmd_set_hostname(const char *hostname)
     exit(0);
 }
 
+/* Check if a binary exists in PATH using POSIX command -v for portability */
+static int binary_exists(const char *name)
+{
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "command -v %s >/dev/null 2>&1", name);
+    return (system(cmd) == 0);
+}
+
+/* Check if SFTP subsystem is configured in sshd_config (shared helper) */
+static int sftp_subsystem_configured(void)
+{
+    const char *sshd_config_paths[] = {
+        "/etc/ssh/sshd_config",
+        "/usr/local/etc/ssh/sshd_config",
+        NULL
+    };
+    for (int i = 0; sshd_config_paths[i] != NULL; i++) {
+        FILE *f = fopen(sshd_config_paths[i], "r");
+        if (f) {
+            char line[512];
+            while (fgets(line, sizeof(line), f)) {
+                char *p = line;
+                while (*p == ' ' || *p == '\t') p++;
+                if (*p == '#' || *p == '\n') continue;
+                if (strncmp(p, "Subsystem", 9) == 0) {
+                    p += 9;
+                    while (*p == ' ' || *p == '\t') p++;
+                    if (strncmp(p, "sftp", 4) == 0) {
+                        fclose(f);
+                        return 1;
+                    }
+                }
+            }
+            fclose(f);
+        }
+    }
+    return 0;
+}
+
 /* Check if a service is running */
 static int check_service_running(const char *service)
 {
@@ -199,6 +238,17 @@ static void cmd_ssh_status(void)
         printf("stopped\n");
     }
 #endif
+    exit(0);
+}
+
+/* SSH installed */
+static void cmd_ssh_installed(void)
+{
+    if (binary_exists("sshd")) {
+        printf("installed\n");
+    } else {
+        printf("not-installed\n");
+    }
     exit(0);
 }
 
@@ -304,6 +354,17 @@ static void cmd_vnc_status(void)
     exit(0);
 }
 
+/* VNC installed */
+static void cmd_vnc_installed(void)
+{
+    if (binary_exists("Xvnc") || binary_exists("x11vnc") || binary_exists("vncserver")) {
+        printf("installed\n");
+    } else {
+        printf("not-installed\n");
+    }
+    exit(0);
+}
+
 /* Start VNC */
 static void cmd_vnc_start(void)
 {
@@ -341,7 +402,7 @@ static void cmd_vnc_start(void)
     }
     
     /* Fall back to starting x11vnc directly if available */
-    if (system("which x11vnc >/dev/null 2>&1") == 0) {
+    if (binary_exists("x11vnc")) {
         syslog(LOG_WARNING, "sharing-helper: No VNC service found, starting x11vnc directly");
         /* Try various auth locations */
         if (system("x11vnc -display :0 -auth /var/run/xauth -forever -bg -rfbport 5900 -nopw >/dev/null 2>&1") == 0) {
@@ -359,7 +420,7 @@ static void cmd_vnc_start(void)
         if (system("x11vnc -display :0 -auth guess -forever -bg -rfbport 5900 -nopw >/dev/null 2>&1") == 0) {
             goto vnc_started;
         }
-    } else if (system("which vncserver >/dev/null 2>&1") == 0) {
+    } else if (binary_exists("vncserver")) {
         /* Try TigerVNC or TightVNC server */
         if (system("vncserver :1 >/dev/null 2>&1") == 0) {
             goto vnc_started;
@@ -388,12 +449,12 @@ static void cmd_vnc_start(void)
     }
     
     /* Fall back to direct start */
-    if (system("which x11vnc >/dev/null 2>&1") == 0) {
+    if (binary_exists("x11vnc")) {
         syslog(LOG_WARNING, "sharing-helper: No VNC service found, starting x11vnc directly");
         if (system("x11vnc -display :0 -forever -bg -rfbport 5900 -nopw >/dev/null 2>&1") == 0) {
             goto vnc_started;
         }
-    } else if (system("which vncserver >/dev/null 2>&1") == 0) {
+    } else if (binary_exists("vncserver")) {
         if (system("vncserver :1 >/dev/null 2>&1") == 0) {
             goto vnc_started;
         }
@@ -413,12 +474,12 @@ static void cmd_vnc_start(void)
     }
     
     /* Fall back to direct start */
-    if (system("which x11vnc >/dev/null 2>&1") == 0) {
+    if (binary_exists("x11vnc")) {
         syslog(LOG_WARNING, "sharing-helper: No VNC service found, starting x11vnc directly");
         if (system("x11vnc -display :0 -forever -bg -rfbport 5900 -nopw >/dev/null 2>&1") == 0) {
             goto vnc_started;
         }
-    } else if (system("which vncserver >/dev/null 2>&1") == 0) {
+    } else if (binary_exists("vncserver")) {
         if (system("vncserver :1 >/dev/null 2>&1") == 0) {
             goto vnc_started;
         }
@@ -509,42 +570,28 @@ static void cmd_sftp_status(void)
 #endif
     
     /* Check if SFTP subsystem is configured in sshd_config */
-    int found = 0;
-    const char *sshd_config_paths[] = {
-        "/etc/ssh/sshd_config",
-        "/usr/local/etc/ssh/sshd_config",
-        NULL
-    };
-    
-    for (int i = 0; sshd_config_paths[i] != NULL; i++) {
-        FILE *f = fopen(sshd_config_paths[i], "r");
-        if (f) {
-            char line[512];
-            while (fgets(line, sizeof(line), f)) {
-                /* Skip comments and whitespace */
-                char *p = line;
-                while (*p == ' ' || *p == '\t') p++;
-                if (*p == '#' || *p == '\n') continue;
-                
-                /* Check for Subsystem sftp */
-                if (strncmp(p, "Subsystem", 9) == 0) {
-                    p += 9;
-                    while (*p == ' ' || *p == '\t') p++;
-                    if (strncmp(p, "sftp", 4) == 0) {
-                        found = 1;
-                        break;
-                    }
-                }
-            }
-            fclose(f);
-            if (found) break;
-        }
-    }
-    
-    if (found) {
+    if (sftp_subsystem_configured()) {
         printf("running\n");
     } else {
         printf("stopped\n");
+    }
+    exit(0);
+}
+
+/* SFTP installed */
+static void cmd_sftp_installed(void)
+{
+    /* Check if sshd binary exists */
+    if (!binary_exists("sshd")) {
+        printf("not-installed\n");
+        exit(0);
+    }
+
+    /* Check if SFTP subsystem is configured */
+    if (sftp_subsystem_configured()) {
+        printf("installed\n");
+    } else {
+        printf("not-installed\n");
     }
     exit(0);
 }
@@ -591,13 +638,24 @@ static void cmd_afp_status(void)
     exit(0);
 }
 
+/* AFP installed */
+static void cmd_afp_installed(void)
+{
+    if (binary_exists("afpd")) {
+        printf("installed\n");
+    } else {
+        printf("not-installed\n");
+    }
+    exit(0);
+}
+
 /* Start AFP */
 static void cmd_afp_start(void)
 {
     syslog(LOG_INFO, "sharing-helper: Starting AFP service");
     
     /* Check if Netatalk is installed */
-    if (system("which afpd >/dev/null 2>&1") != 0) {
+    if (!binary_exists("afpd")) {
         fprintf(stderr, "AFP server (Netatalk) is not installed\n");
         syslog(LOG_ERR, "sharing-helper: AFP server (Netatalk) not found");
         exit(1);
@@ -721,13 +779,24 @@ static void cmd_smb_status(void)
     exit(0);
 }
 
+/* SMB installed */
+static void cmd_smb_installed(void)
+{
+    if (binary_exists("smbd")) {
+        printf("installed\n");
+    } else {
+        printf("not-installed\n");
+    }
+    exit(0);
+}
+
 /* Start Samba */
 static void cmd_smb_start(void)
 {
     syslog(LOG_INFO, "sharing-helper: Starting Samba service");
     
     /* Check if Samba is installed */
-    if (system("which smbd >/dev/null 2>&1") != 0) {
+    if (!binary_exists("smbd")) {
         fprintf(stderr, "Samba server is not installed\n");
         syslog(LOG_ERR, "sharing-helper: Samba server not found");
         exit(1);
@@ -872,18 +941,23 @@ static void usage(const char *progname)
     fprintf(stderr, "  get-hostname          Get system hostname\n");
     fprintf(stderr, "  set-hostname <name>   Set system hostname\n");
     fprintf(stderr, "  ssh-status            Check SSH daemon status\n");
+    fprintf(stderr, "  ssh-installed         Check if SSH daemon is installed\n");
     fprintf(stderr, "  ssh-start             Start SSH daemon\n");
     fprintf(stderr, "  ssh-stop              Stop SSH daemon\n");
     fprintf(stderr, "  sftp-status           Check SFTP status\n");
+    fprintf(stderr, "  sftp-installed        Check if SFTP subsystem is installed\n");
     fprintf(stderr, "  sftp-start            Start SFTP (enables SSH)\n");
     fprintf(stderr, "  sftp-stop             Stop SFTP announcement\n");
     fprintf(stderr, "  afp-status            Check AFP server status\n");
+    fprintf(stderr, "  afp-installed         Check if AFP server (Netatalk) is installed\n");
     fprintf(stderr, "  afp-start             Start AFP server (Netatalk)\n");
     fprintf(stderr, "  afp-stop              Stop AFP server\n");
     fprintf(stderr, "  smb-status            Check Samba server status\n");
+    fprintf(stderr, "  smb-installed         Check if Samba server is installed\n");
     fprintf(stderr, "  smb-start             Start Samba server\n");
     fprintf(stderr, "  smb-stop              Stop Samba server\n");
     fprintf(stderr, "  vnc-status            Check VNC server status\n");
+    fprintf(stderr, "  vnc-installed         Check if VNC server is installed\n");
     fprintf(stderr, "  vnc-start             Start VNC server\n");
     fprintf(stderr, "  vnc-stop              Stop VNC server\n");
     exit(1);
@@ -904,14 +978,24 @@ int main(int argc, char *argv[])
         cmd_get_hostname();
     } else if (strcmp(cmd, "ssh-status") == 0) {
         cmd_ssh_status();
+    } else if (strcmp(cmd, "ssh-installed") == 0) {
+        cmd_ssh_installed();
     } else if (strcmp(cmd, "sftp-status") == 0) {
         cmd_sftp_status();
+    } else if (strcmp(cmd, "sftp-installed") == 0) {
+        cmd_sftp_installed();
     } else if (strcmp(cmd, "afp-status") == 0) {
         cmd_afp_status();
+    } else if (strcmp(cmd, "afp-installed") == 0) {
+        cmd_afp_installed();
     } else if (strcmp(cmd, "smb-status") == 0) {
         cmd_smb_status();
+    } else if (strcmp(cmd, "smb-installed") == 0) {
+        cmd_smb_installed();
     } else if (strcmp(cmd, "vnc-status") == 0) {
         cmd_vnc_status();
+    } else if (strcmp(cmd, "vnc-installed") == 0) {
+        cmd_vnc_installed();
     }
     
     /* Commands that require root */

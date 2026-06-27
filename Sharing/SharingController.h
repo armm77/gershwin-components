@@ -48,6 +48,14 @@
     BOOL sftpEnabled;
     BOOL afpEnabled;
     BOOL smbEnabled;
+
+    // Installation state
+    BOOL sshInstalled;
+    BOOL vncInstalled;
+    BOOL sftpInstalled;
+    BOOL afpInstalled;
+    BOOL smbInstalled;
+
     NSString *currentHostname;
     
     // Path to helper

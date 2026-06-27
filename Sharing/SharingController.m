@@ -23,7 +23,6 @@ static const float METRICS_TEXT_INPUT_FIELD_HEIGHT = 22.0;
 static const float METRICS_BUTTON_HEIGHT = 20.0;
 static const float METRICS_BUTTON_MIN_WIDTH = 69.0;
 static const float METRICS_RADIO_BUTTON_SIZE = 18.0;
-static const float METRICS_RADIO_BUTTON_LINE_SPACING = 20.0;
 static const float METRICS_SPACE_8 = 8.0;  // Between control and its label
 static const float METRICS_SPACE_12 = 12.0;  // Between buttons
 static const float METRICS_SPACE_16 = 16.0;  // Between controls in a group
@@ -280,6 +279,57 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     return NO;
 }
 
+- (BOOL)getSSHInstalled
+{
+    NSString *output = [self runHelper:@"ssh-installed"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"installed"];
+    }
+    // Default: assume installed if helper fails (so we don't block the user unnecessarily)
+    return YES;
+}
+
+- (BOOL)getVNCInstalled
+{
+    NSString *output = [self runHelper:@"vnc-installed"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"installed"];
+    }
+    return YES;
+}
+
+- (BOOL)getSFTPInstalled
+{
+    NSString *output = [self runHelper:@"sftp-installed"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"installed"];
+    }
+    return YES;
+}
+
+- (BOOL)getAFPInstalled
+{
+    NSString *output = [self runHelper:@"afp-installed"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"installed"];
+    }
+    return YES;
+}
+
+- (BOOL)getSMBInstalled
+{
+    NSString *output = [self runHelper:@"smb-installed"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"installed"];
+    }
+    return YES;
+}
+
 - (NSString *)getLocalIPAddress
 {
     NSMutableString *addresses = [NSMutableString string];
@@ -351,16 +401,21 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     
     if (success) {
         ASSIGN(currentHostname, newHostname);
-        
-        // Update mDNS service name
+
+        // Update mDNS service name and re-announce all active services
         GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
         if (mgr && [mgr isAvailable]) {
             [mgr setComputerName:newHostname];
-            NSDebugLog(@"SharingController: Updated mDNS computer name to %@", newHostname);
+            NSDebugLog(@"SharingController: Updated mDNS computer name to %@ and re-announced services", newHostname);
+        } else {
+            NSDebugLog(@"SharingController: mDNS not available, hostname changed without mDNS update");
         }
-        
-        NSDebugLog(@"SharingController: Hostname changed to %@", newHostname);
+
+        // Refresh the UI immediately to reflect the new hostname
         [applyHostnameButton setEnabled:NO];
+        [self refreshStatus:nil];
+
+        NSDebugLog(@"SharingController: Hostname changed to %@", newHostname);
 
     } else {
         NSRunAlertPanel(@"Hostname Error", 
@@ -655,11 +710,20 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         BOOL sftp = [self getSFTPStatus];
         BOOL afp  = [self getAFPStatus];
         BOOL smb  = [self getSMBStatus];
+        // Also query installation state for each service
+        BOOL isSshInstalled  = [self getSSHInstalled];
+        BOOL isVncInstalled  = [self getVNCInstalled];
+        BOOL isSftpInstalled = [self getSFTPInstalled];
+        BOOL isAfpInstalled  = [self getAFPInstalled];
+        BOOL isSmbInstalled  = [self getSMBInstalled];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             isRefreshingStatus = NO;
             [self updateUIWithHostname:hostname
-                                   ssh:ssh vnc:vnc sftp:sftp afp:afp smb:smb];
+                                   ssh:ssh vnc:vnc sftp:sftp afp:afp smb:smb
+                          sshInstalled:isSshInstalled vncInstalled:isVncInstalled
+                         sftpInstalled:isSftpInstalled afpInstalled:isAfpInstalled
+                          smbInstalled:isSmbInstalled];
         });
     });
 }
@@ -667,183 +731,268 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (void)updateUIWithHostname:(NSString *)hostname
                          ssh:(BOOL)ssh vnc:(BOOL)vnc sftp:(BOOL)sftp
                          afp:(BOOL)afp smb:(BOOL)smb
+                sshInstalled:(BOOL)isSshInstalled vncInstalled:(BOOL)isVncInstalled
+               sftpInstalled:(BOOL)isSftpInstalled afpInstalled:(BOOL)isAfpInstalled
+                smbInstalled:(BOOL)isSmbInstalled
 {
     // Safety check in case the pane was unselected while we were querying
     if (!hostnameField || !sshCheckbox) {
         return;
     }
 
-    // Update hostname
-    [hostnameField setStringValue:hostname];
-    ASSIGN(currentHostname, hostname);
+    // Update hostname only when the user is not actively editing the field
+    if ([hostnameField currentEditor] == nil) {
+        [hostnameField setStringValue:hostname];
+        ASSIGN(currentHostname, hostname);
+    }
 
-    // Update SSH status
-    sshEnabled = ssh;
-    [sshCheckbox setState:sshEnabled ? NSOnState : NSOffState];
-    
-    if (sshEnabled) {
-        [sshStatusLabel setStringValue:@"On"];
-        [sshStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
-        
-        NSString *ipAddress = [self getLocalIPAddress];
-        NSString *info = [NSString stringWithFormat:@"To connect: ssh user@%@", ipAddress];
-        [sshInfoLabel setStringValue:info];
+    // Clear transient hostname status message (it's set by applyHostname on success)
+    [hostnameStatusLabel setStringValue:@""];
+
+    // Light grey for "N/A" (not installed) status
+    NSColor *naColor = [NSColor colorWithCalibratedWhite:0.6 alpha:1.0];
+
+    // Update mDNS status label with current hostname
+    GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+    if (mgr && [mgr isAvailable]) {
+        int announcedCount = [[mgr announcedServices] count];
+        NSString *statusText = [NSString stringWithFormat:@"Service Discovery: Available (%@)\n"
+                               @"Publishing services as \"%@\" on the local network.",
+                               [mgr backendName], hostname];
+        if (announcedCount > 0) {
+            statusText = [NSString stringWithFormat:@"Service Discovery: Available (%@)\n"
+                                   @"Publishing services as \"%@\" on the local network (%d active).",
+                                   [mgr backendName], hostname, announcedCount];
+        }
+        [mdnsStatusLabel setStringValue:statusText];
+        [mdnsStatusLabel setTextColor:[NSColor darkGrayColor]];
+    } else {
+        [mdnsStatusLabel setStringValue:@"Service Discovery: Not available\nInstall avahi-daemon or mDNSResponder for automatic network service announcement."];
+        [mdnsStatusLabel setTextColor:[NSColor grayColor]];
+    }
+
+    // Determine the address to show in connection info.
+    // If mDNS is available, use hostname.local for cleaner, portable connection strings
+    // that work across the local network without knowing the IP.
+    NSString *serviceAddress;
+    if (mgr && [mgr isAvailable]) {
+        serviceAddress = [NSString stringWithFormat:@"%@.local", hostname];
+    } else {
+        serviceAddress = [self getLocalIPAddress];
+    }
+
+    // --- SSH ---
+    if (!isSshInstalled) {
+        [sshCheckbox setEnabled:NO];
+        [sshCheckbox setState:NSOffState];
+        [sshStatusLabel setStringValue:@"N/A"];
+        [sshStatusLabel setTextColor:naColor];
+        [sshInfoLabel setStringValue:@"Install OpenSSH server (openssh-server) to enable Remote Login."];
         [sshInfoLabel setHidden:NO];
-        
-        // Ensure mDNS announcement is active
-        GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
-        if (mgr && [mgr isAvailable] && 
-            ![mgr isServiceAnnounced:GSServiceTypeSSH]) {
-            [mgr announceService:GSServiceTypeSSH port:22 txtRecord:nil];
-            NSDebugLog(@"SharingController: Re-announced SSH service via mDNS");
-        }
     } else {
-        [sshStatusLabel setStringValue:@"Off"];
-        [sshStatusLabel setTextColor:[NSColor grayColor]];
-        [sshInfoLabel setHidden:YES];
-        
-        // Ensure mDNS announcement is stopped
-        GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
-        if (mgr && [mgr isAvailable] && 
-            [mgr isServiceAnnounced:GSServiceTypeSSH]) {
-            [mgr unannounceService:GSServiceTypeSSH];
-            NSDebugLog(@"SharingController: Unannounced SSH service from mDNS");
+        [sshCheckbox setEnabled:YES];
+        sshEnabled = ssh;
+        [sshCheckbox setState:sshEnabled ? NSOnState : NSOffState];
+
+        if (sshEnabled) {
+            [sshStatusLabel setStringValue:@"On"];
+            [sshStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
+
+            NSString *info = [NSString stringWithFormat:@"To connect: ssh user@%@", serviceAddress];
+            [sshInfoLabel setStringValue:info];
+            [sshInfoLabel setHidden:NO];
+
+            // Ensure mDNS announcement is active
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                ![mgr isServiceAnnounced:GSServiceTypeSSH]) {
+                [mgr announceService:GSServiceTypeSSH port:22 txtRecord:nil];
+                NSDebugLog(@"SharingController: Re-announced SSH service via mDNS");
+            }
+        } else {
+            [sshStatusLabel setStringValue:@"Off"];
+            [sshStatusLabel setTextColor:[NSColor grayColor]];
+            [sshInfoLabel setHidden:YES];
+
+            // Ensure mDNS announcement is stopped
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                [mgr isServiceAnnounced:GSServiceTypeSSH]) {
+                [mgr unannounceService:GSServiceTypeSSH];
+                NSDebugLog(@"SharingController: Unannounced SSH service from mDNS");
+            }
         }
     }
-    
-    // Update VNC status
-    vncEnabled = vnc;
-    [vncCheckbox setState:vncEnabled ? NSOnState : NSOffState];
-    
-    if (vncEnabled) {
-        [vncStatusLabel setStringValue:@"On"];
-        [vncStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
-        
-        NSString *ipAddress = [self getLocalIPAddress];
-        NSString *info = [NSString stringWithFormat:@"To connect: %@ (port 5900)", ipAddress];
-        [vncInfoLabel setStringValue:info];
+
+    // --- VNC ---
+    if (!isVncInstalled) {
+        [vncCheckbox setEnabled:NO];
+        [vncCheckbox setState:NSOffState];
+        [vncStatusLabel setStringValue:@"N/A"];
+        [vncStatusLabel setTextColor:naColor];
+        [vncInfoLabel setStringValue:@"Install a VNC server (x11vnc, TigerVNC, or TightVNC) to enable Screen Sharing."];
         [vncInfoLabel setHidden:NO];
-        
-        // Ensure mDNS announcement is active
-        GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
-        if (mgr && [mgr isAvailable] && 
-            ![mgr isServiceAnnounced:GSServiceTypeVNC]) {
-            [mgr announceService:GSServiceTypeVNC port:5900 txtRecord:nil];
-            NSDebugLog(@"SharingController: Re-announced VNC service via mDNS");
-        }
     } else {
-        [vncStatusLabel setStringValue:@"Off"];
-        [vncStatusLabel setTextColor:[NSColor grayColor]];
-        [vncInfoLabel setHidden:YES];
-        
-        // Ensure mDNS announcement is stopped
-        GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
-        if (mgr && [mgr isAvailable] && 
-            [mgr isServiceAnnounced:GSServiceTypeVNC]) {
-            [mgr unannounceService:GSServiceTypeVNC];
-            NSDebugLog(@"SharingController: Unannounced VNC service from mDNS");
+        [vncCheckbox setEnabled:YES];
+        vncEnabled = vnc;
+        [vncCheckbox setState:vncEnabled ? NSOnState : NSOffState];
+
+        if (vncEnabled) {
+            [vncStatusLabel setStringValue:@"On"];
+            [vncStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
+
+            NSString *info = [NSString stringWithFormat:@"To connect: %@ (port 5900)", serviceAddress];
+            [vncInfoLabel setStringValue:info];
+            [vncInfoLabel setHidden:NO];
+
+            // Ensure mDNS announcement is active
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                ![mgr isServiceAnnounced:GSServiceTypeVNC]) {
+                [mgr announceService:GSServiceTypeVNC port:5900 txtRecord:nil];
+                NSDebugLog(@"SharingController: Re-announced VNC service via mDNS");
+            }
+        } else {
+            [vncStatusLabel setStringValue:@"Off"];
+            [vncStatusLabel setTextColor:[NSColor grayColor]];
+            [vncInfoLabel setHidden:YES];
+
+            // Ensure mDNS announcement is stopped
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                [mgr isServiceAnnounced:GSServiceTypeVNC]) {
+                [mgr unannounceService:GSServiceTypeVNC];
+                NSDebugLog(@"SharingController: Unannounced VNC service from mDNS");
+            }
         }
     }
-    
-    // Update SFTP status
-    sftpEnabled = sftp;
-    [sftpCheckbox setState:sftpEnabled ? NSOnState : NSOffState];
-    
-    if (sftpEnabled) {
-        [sftpStatusLabel setStringValue:@"On"];
-        [sftpStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
-        
-        NSString *ipAddress = [self getLocalIPAddress];
-        NSString *info = [NSString stringWithFormat:@"SFTP via SSH: sftp user@%@", ipAddress];
-        [sftpInfoLabel setStringValue:info];
+
+    // --- SFTP ---
+    if (!isSftpInstalled) {
+        [sftpCheckbox setEnabled:NO];
+        [sftpCheckbox setState:NSOffState];
+        [sftpStatusLabel setStringValue:@"N/A"];
+        [sftpStatusLabel setTextColor:naColor];
+        [sftpInfoLabel setStringValue:@"SFTP requires the OpenSSH server with SFTP subsystem enabled."];
         [sftpInfoLabel setHidden:NO];
-        
-        // Ensure mDNS announcement is active
-        GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
-        if (mgr && [mgr isAvailable] && 
-            ![mgr isServiceAnnounced:GSServiceTypeSFTP]) {
-            [mgr announceService:GSServiceTypeSFTP port:22 txtRecord:nil];
-            NSDebugLog(@"SharingController: Re-announced SFTP service via mDNS");
-        }
     } else {
-        [sftpStatusLabel setStringValue:@"Off"];
-        [sftpStatusLabel setTextColor:[NSColor grayColor]];
-        [sftpInfoLabel setHidden:YES];
-        
-        // Ensure mDNS announcement is stopped
-        GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
-        if (mgr && [mgr isAvailable] && 
-            [mgr isServiceAnnounced:GSServiceTypeSFTP]) {
-            [mgr unannounceService:GSServiceTypeSFTP];
-            NSDebugLog(@"SharingController: Unannounced SFTP service from mDNS");
+        [sftpCheckbox setEnabled:YES];
+        sftpEnabled = sftp;
+        [sftpCheckbox setState:sftpEnabled ? NSOnState : NSOffState];
+
+        if (sftpEnabled) {
+            [sftpStatusLabel setStringValue:@"On"];
+            [sftpStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
+
+            NSString *info = [NSString stringWithFormat:@"SFTP via SSH: sftp user@%@", serviceAddress];
+            [sftpInfoLabel setStringValue:info];
+            [sftpInfoLabel setHidden:NO];
+
+            // Ensure mDNS announcement is active
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                ![mgr isServiceAnnounced:GSServiceTypeSFTP]) {
+                [mgr announceService:GSServiceTypeSFTP port:22 txtRecord:nil];
+                NSDebugLog(@"SharingController: Re-announced SFTP service via mDNS");
+            }
+        } else {
+            [sftpStatusLabel setStringValue:@"Off"];
+            [sftpStatusLabel setTextColor:[NSColor grayColor]];
+            [sftpInfoLabel setHidden:YES];
+
+            // Ensure mDNS announcement is stopped
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                [mgr isServiceAnnounced:GSServiceTypeSFTP]) {
+                [mgr unannounceService:GSServiceTypeSFTP];
+                NSDebugLog(@"SharingController: Unannounced SFTP service from mDNS");
+            }
         }
     }
-    
-    // Update AFP status
-    afpEnabled = afp;
-    [afpCheckbox setState:afpEnabled ? NSOnState : NSOffState];
-    
-    if (afpEnabled) {
-        [afpStatusLabel setStringValue:@"On"];
-        [afpStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
-        
-        NSString *ipAddress = [self getLocalIPAddress];
-        NSString *info = [NSString stringWithFormat:@"AFP available at: afp://%@ (port 548)", ipAddress];
-        [afpInfoLabel setStringValue:info];
+
+    // --- AFP ---
+    if (!isAfpInstalled) {
+        [afpCheckbox setEnabled:NO];
+        [afpCheckbox setState:NSOffState];
+        [afpStatusLabel setStringValue:@"N/A"];
+        [afpStatusLabel setTextColor:naColor];
+        [afpInfoLabel setStringValue:@"Install Netatalk to enable Apple File Sharing (AFP)."];
         [afpInfoLabel setHidden:NO];
-        
-        // Ensure mDNS announcement is active
-        GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
-        if (mgr && [mgr isAvailable] && 
-            ![mgr isServiceAnnounced:GSServiceTypeAFP]) {
-            [mgr announceService:GSServiceTypeAFP port:548 txtRecord:nil];
-            NSDebugLog(@"SharingController: Re-announced AFP service via mDNS");
-        }
     } else {
-        [afpStatusLabel setStringValue:@"Off"];
-        [afpStatusLabel setTextColor:[NSColor grayColor]];
-        [afpInfoLabel setHidden:YES];
-        
-        // Ensure mDNS announcement is stopped
-        GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
-        if (mgr && [mgr isAvailable] && 
-            [mgr isServiceAnnounced:GSServiceTypeAFP]) {
-            [mgr unannounceService:GSServiceTypeAFP];
-            NSDebugLog(@"SharingController: Unannounced AFP service from mDNS");
+        [afpCheckbox setEnabled:YES];
+        afpEnabled = afp;
+        [afpCheckbox setState:afpEnabled ? NSOnState : NSOffState];
+
+        if (afpEnabled) {
+            [afpStatusLabel setStringValue:@"On"];
+            [afpStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
+
+            NSString *info = [NSString stringWithFormat:@"AFP available at: afp://%@ (port 548)", serviceAddress];
+            [afpInfoLabel setStringValue:info];
+            [afpInfoLabel setHidden:NO];
+
+            // Ensure mDNS announcement is active
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                ![mgr isServiceAnnounced:GSServiceTypeAFP]) {
+                [mgr announceService:GSServiceTypeAFP port:548 txtRecord:nil];
+                NSDebugLog(@"SharingController: Re-announced AFP service via mDNS");
+            }
+        } else {
+            [afpStatusLabel setStringValue:@"Off"];
+            [afpStatusLabel setTextColor:[NSColor grayColor]];
+            [afpInfoLabel setHidden:YES];
+
+            // Ensure mDNS announcement is stopped
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                [mgr isServiceAnnounced:GSServiceTypeAFP]) {
+                [mgr unannounceService:GSServiceTypeAFP];
+                NSDebugLog(@"SharingController: Unannounced AFP service from mDNS");
+            }
         }
     }
-    
-    // Update SMB status
-    smbEnabled = smb;
-    [smbCheckbox setState:smbEnabled ? NSOnState : NSOffState];
-    
-    if (smbEnabled) {
-        [smbStatusLabel setStringValue:@"On"];
-        [smbStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
-        
-        NSString *ipAddress = [self getLocalIPAddress];
-        NSString *info = [NSString stringWithFormat:@"SMB available at: smb://%@", ipAddress];
-        [smbInfoLabel setStringValue:info];
+
+    // --- SMB ---
+    if (!isSmbInstalled) {
+        [smbCheckbox setEnabled:NO];
+        [smbCheckbox setState:NSOffState];
+        [smbStatusLabel setStringValue:@"N/A"];
+        [smbStatusLabel setTextColor:naColor];
+        [smbInfoLabel setStringValue:@"Install Samba to enable Windows File Sharing (SMB)."];
         [smbInfoLabel setHidden:NO];
-        
-        // Ensure mDNS announcement is active
-        GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
-        if (mgr && [mgr isAvailable] && 
-            ![mgr isServiceAnnounced:GSServiceTypeSMB]) {
-            [mgr announceService:GSServiceTypeSMB port:445 txtRecord:nil];
-            NSDebugLog(@"SharingController: Re-announced SMB service via mDNS");
-        }
     } else {
-        [smbStatusLabel setStringValue:@"Off"];
-        [smbStatusLabel setTextColor:[NSColor grayColor]];
-        [smbInfoLabel setHidden:YES];
-        
-        // Ensure mDNS announcement is stopped
-        GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
-        if (mgr && [mgr isAvailable] && 
-            [mgr isServiceAnnounced:GSServiceTypeSMB]) {
-            [mgr unannounceService:GSServiceTypeSMB];
-            NSDebugLog(@"SharingController: Unannounced SMB service from mDNS");
+        [smbCheckbox setEnabled:YES];
+        smbEnabled = smb;
+        [smbCheckbox setState:smbEnabled ? NSOnState : NSOffState];
+
+        if (smbEnabled) {
+            [smbStatusLabel setStringValue:@"On"];
+            [smbStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
+
+            NSString *info = [NSString stringWithFormat:@"SMB available at: smb://%@", serviceAddress];
+            [smbInfoLabel setStringValue:info];
+            [smbInfoLabel setHidden:NO];
+
+            // Ensure mDNS announcement is active
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                ![mgr isServiceAnnounced:GSServiceTypeSMB]) {
+                [mgr announceService:GSServiceTypeSMB port:445 txtRecord:nil];
+                NSDebugLog(@"SharingController: Re-announced SMB service via mDNS");
+            }
+        } else {
+            [smbStatusLabel setStringValue:@"Off"];
+            [smbStatusLabel setTextColor:[NSColor grayColor]];
+            [smbInfoLabel setHidden:YES];
+
+            // Ensure mDNS announcement is stopped
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                [mgr isServiceAnnounced:GSServiceTypeSMB]) {
+                [mgr unannounceService:GSServiceTypeSMB];
+                NSDebugLog(@"SharingController: Unannounced SMB service from mDNS");
+            }
         }
     }
 }
@@ -900,6 +1049,8 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     hostnameField = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldLeft, yPos - METRICS_TEXT_INPUT_FIELD_HEIGHT, fieldWidth, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
     [hostnameField setStringValue:@""];
     [hostnameField setFont:[NSFont systemFontOfSize:13]];  // METRICS_FONT_SYSTEM_REGULAR_13
+    [hostnameField setTarget:self];
+    [hostnameField setAction:@selector(applyHostname:)];
     [mainView addSubview:hostnameField];
     
     applyHostnameButton = [[NSButton alloc] initWithFrame:NSMakeRect(fieldLeft + fieldWidth + METRICS_SPACE_12, yPos - METRICS_BUTTON_HEIGHT - 1, buttonWidth, METRICS_BUTTON_HEIGHT)];
