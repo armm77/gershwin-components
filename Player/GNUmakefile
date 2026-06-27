@@ -70,6 +70,8 @@ ITEMFLOW_LIB := $(ITEMFLOW_SRC)/ItemFlow.framework/Versions/Current
 ADDITIONAL_INCLUDE_DIRS += -I$(ITEMFLOW_SRC)
 ADDITIONAL_LDFLAGS += -L$(ITEMFLOW_LIB)
 ADDITIONAL_GUI_LIBS += -lItemFlow -lGL -lGLU
+# ItemFlow uses libdispatch internally; on FreeBSD the strict linker needs it explicitly.
+ADDITIONAL_GUI_LIBS += -ldispatch
 
 -include GNUmakefile.preamble
 
