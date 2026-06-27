@@ -61,8 +61,14 @@ Player_GUI_LIBS += -lAVFoundation
 #
 # ItemFlow framework for album-art carousel
 #
-ADDITIONAL_INCLUDE_DIRS += -I../ItemFlow
-ADDITIONAL_LDFLAGS += -L../ItemFlow/ItemFlow.framework/Versions/Current
+# On local builds ItemFlow is usually installed system-wide so -lItemFlow
+# is found via default search paths.  On CI, ItemFlow is built in-tree but
+# not yet installed — add a -L fallback so the linker finds it either way.
+#
+ITEMFLOW_SRC := $(CURDIR)/../ItemFlow
+ITEMFLOW_LIB := $(ITEMFLOW_SRC)/ItemFlow.framework/Versions/Current
+ADDITIONAL_INCLUDE_DIRS += -I$(ITEMFLOW_SRC)
+ADDITIONAL_LDFLAGS += -L$(ITEMFLOW_LIB)
 ADDITIONAL_GUI_LIBS += -lItemFlow -lGL -lGLU
 
 -include GNUmakefile.preamble
