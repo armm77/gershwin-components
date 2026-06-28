@@ -47,6 +47,7 @@ typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
     NSTextField *titleLabel;
     NSTextField *artistLabel;
     NSTextField *albumLabel;
+    NSTextField *detailsLabel;
     NSProgressIndicator *progressIndicator;
 
     // Layout geometry cache (recomputed on resize)
@@ -95,6 +96,7 @@ typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
 @property (retain) NSTextField *titleLabel;
 @property (retain) NSTextField *artistLabel;
 @property (retain) NSTextField *albumLabel;
+@property (retain) NSTextField *detailsLabel;
 @property (retain) NSProgressIndicator *progressIndicator;
 
 // UI Creation

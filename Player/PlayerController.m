@@ -29,8 +29,16 @@
 - (NSArray *)scanFolderForMediaFiles:(NSString *)folderPath;
 @end
 
+// Default window size (content rect, excl. titlebar)
+#define DEFAULT_WINDOW_WIDTH   520.0
+#define DEFAULT_WINDOW_HEIGHT  370.0
+
+// Minimum content area size
+#define PLAYER_CONTENT_MIN_WIDTH   METRICS_WIN_MIN_WIDTH
+#define PLAYER_CONTENT_MIN_HEIGHT  320.0
+
 // Height of the cover-art / video area as a fraction of window height
-#define COVER_AREA_FRACTION  0.55
+#define COVER_AREA_FRACTION  0.5
 
 // Height of the metadata text block (3 lines + spacing)
 #define METADATA_HEIGHT      56.0
@@ -115,6 +123,7 @@
 @synthesize titleLabel;
 @synthesize artistLabel;
 @synthesize albumLabel;
+@synthesize detailsLabel;
 @synthesize progressIndicator;
 
 #pragma mark - Init / Dealloc
@@ -138,8 +147,10 @@
         isVideo = NO;
         isFullscreen = NO;
         srandom((unsigned int)time(NULL));
-        repeatEnabled = NO;
-        shuffleEnabled = NO;
+        // Load persisted preferences via NSUserDefaults (GNUstep standard)
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        repeatEnabled = [defaults boolForKey:@"PlayerRepeatEnabled"];
+        shuffleEnabled = [defaults boolForKey:@"PlayerShuffleEnabled"];
         coverAreaHeight = 200.0;
     }
     return self;
@@ -172,6 +183,7 @@
     [currentFilePath release];
     [playlist release];
     [coverImages release];
+    [detailsLabel release];
     [overlayBar release];
     [super dealloc];
 }
@@ -302,13 +314,13 @@
                                 action:@selector(toggleRepeat:)
                          keyEquivalent:@"r"];
     [repeatMenuItem setTarget:self];
-    [repeatMenuItem setState:NSOffState];
+    [repeatMenuItem setState:repeatEnabled ? NSOnState : NSOffState];
     shuffleMenuItem = (NSMenuItem *)
         [playbackMenu addItemWithTitle:@"Shuffle"
                                 action:@selector(toggleShuffle:)
                          keyEquivalent:@"s"];
     [shuffleMenuItem setTarget:self];
-    [shuffleMenuItem setState:NSOffState];
+    [shuffleMenuItem setState:shuffleEnabled ? NSOnState : NSOffState];
     [playbackMenuItem setSubmenu:playbackMenu];
     [mainMenu addItem:playbackMenuItem];
     [playbackMenu release];
@@ -368,8 +380,8 @@
 {
     [self createMenu];
 
-    CGFloat windowWidth = 520.0;
-    CGFloat windowHeight = 420.0;
+    CGFloat windowWidth = DEFAULT_WINDOW_WIDTH;
+    CGFloat windowHeight = DEFAULT_WINDOW_HEIGHT;
     coverAreaHeight = floorf(windowHeight * COVER_AREA_FRACTION);
 
     NSRect windowFrame = NSMakeRect(100, 100, windowWidth, windowHeight);
@@ -382,9 +394,9 @@
                                                  defer:NO];
     [mainWindow setTitle:@"Player"];
     [mainWindow setDelegate:self];
-    [mainWindow setMinSize:NSMakeSize(400, 320)];
+    [mainWindow setMinSize:NSMakeSize(PLAYER_CONTENT_MIN_WIDTH, PLAYER_CONTENT_MIN_HEIGHT)];
     [mainWindow setAcceptsMouseMovedEvents:YES];
-    [mainWindow setContentMinSize:NSMakeSize(400, 320)];
+    [mainWindow setContentMinSize:NSMakeSize(PLAYER_CONTENT_MIN_WIDTH, PLAYER_CONTENT_MIN_HEIGHT)];
 
     // Replace the default content view with a drop-target view for drag-and-drop
     DropTargetView *dropView = [[DropTargetView alloc]
@@ -532,6 +544,15 @@
     [albumLabel setFont:METRICS_FONT_SYSTEM_REGULAR_11];
     [contentView addSubview:albumLabel];
 
+    detailsLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    [detailsLabel setStringValue:@""];
+    [detailsLabel setEditable:NO];
+    [detailsLabel setSelectable:NO];
+    [detailsLabel setBezeled:NO];
+    [detailsLabel setDrawsBackground:NO];
+    [detailsLabel setFont:METRICS_FONT_SYSTEM_REGULAR_11];
+    [contentView addSubview:detailsLabel];
+
     // Initial layout
     [self layoutSubviews];
 }
@@ -674,9 +695,10 @@
     [titleLabel setHidden:NO];
     [artistLabel setHidden:NO];
     [albumLabel setHidden:NO];
+    [detailsLabel setHidden:NO];
 
-    // ---- Cover / video area (50 %) ----
-    coverAreaHeight = MAX(120.0, floorf(H * 0.50));
+    // ---- Cover / video area (COVER_AREA_FRACTION) ----
+    coverAreaHeight = MAX(120.0, floorf(H * COVER_AREA_FRACTION));
     CGFloat coverBottom = H - coverAreaHeight; // top of content below cover
     NSRect coverFrame = NSMakeRect(0, coverBottom, W, coverAreaHeight);
     [flowView setFrame:coverFrame];
@@ -692,7 +714,7 @@
     CGFloat y = coverBottom;  // descending cursor
 
     // ---- Metadata area (directly below cover) ----
-    y -= 6;
+    y -= METRICS_SPACE_12;
     CGFloat metaW = W - 2 * margin;
     CGFloat lineH = 15.0;
     CGFloat lineGap = 1.0;
@@ -709,8 +731,12 @@
     [albumLabel setFrame:NSMakeRect(margin, y, metaW, lineH)];
     [albumLabel setAutoresizingMask:NSViewWidthSizable];
 
+    y -= lineGap + lineH;
+    [detailsLabel setFrame:NSMakeRect(margin, y, metaW, lineH)];
+    [detailsLabel setAutoresizingMask:NSViewWidthSizable];
+
     // ---- Time slider row ----
-    y -= 8;
+    y -= METRICS_SPACE_8;
     CGFloat timeLabelW = 42.0;
     CGFloat sliderW = W - 2 * margin - 2 * timeLabelW - 8;
 
@@ -725,7 +751,7 @@
     y -= SLIDER_BAR_HEIGHT;
 
     // ---- Playback controls row (centered) ----
-    y -= 8;
+    y -= METRICS_SPACE_12;
     CGFloat btnW = 36.0;
     CGFloat btnH = CONTROL_BAR_HEIGHT;
     CGFloat gap = 6.0;
@@ -739,16 +765,17 @@
     y -= btnH;
 
     // ---- Bottom row: Open, Fullscreen ----
-    y -= 8;
+    y -= METRICS_SPACE_12;
+    CGFloat bottomBtnH = METRICS_BUTTON_HEIGHT;
     CGFloat openW = 68.0;
     CGFloat fsBtnW = 28.0;
 
-    [openButton setFrame:NSMakeRect(margin, y, openW, btnH)];
+    [openButton setFrame:NSMakeRect(margin, y, openW, bottomBtnH)];
     [openButton setAutoresizingMask:NSViewMaxXMargin];
 
     // Fullscreen button on the right
     CGFloat rightEdge = W - margin;
-    [fullscreenButton setFrame:NSMakeRect(rightEdge - fsBtnW, y, fsBtnW, btnH)];
+    [fullscreenButton setFrame:NSMakeRect(rightEdge - fsBtnW, y, fsBtnW, bottomBtnH)];
     [fullscreenButton setAutoresizingMask:NSViewMinXMargin];
 
     // Hide overlay if in normal mode
@@ -790,6 +817,7 @@
     [titleLabel setHidden:YES];
     [artistLabel setHidden:YES];
     [albumLabel setHidden:YES];
+    [detailsLabel setHidden:YES];
 
     // Create overlay bar if needed
     if (!overlayBar) {
@@ -903,8 +931,8 @@
 
     // Restore normal size
     NSRect screenFrame = [[NSScreen mainScreen] visibleFrame];
-    CGFloat w = 520.0;
-    CGFloat h = 420.0;
+    CGFloat w = DEFAULT_WINDOW_WIDTH;
+    CGFloat h = DEFAULT_WINDOW_HEIGHT;
     NSRect frame = NSMakeRect(
         NSMidX(screenFrame) - w / 2.0,
         NSMidY(screenFrame) - h / 2.0,
@@ -1136,6 +1164,7 @@
 {
     repeatEnabled = !repeatEnabled;
     [repeatMenuItem setState:repeatEnabled ? NSOnState : NSOffState];
+    [[NSUserDefaults standardUserDefaults] setBool:repeatEnabled forKey:@"PlayerRepeatEnabled"];
     [self updateStatus:repeatEnabled ? @"Repeat on" : @"Repeat off"];
 }
 
@@ -1143,6 +1172,7 @@
 {
     shuffleEnabled = !shuffleEnabled;
     [shuffleMenuItem setState:shuffleEnabled ? NSOnState : NSOffState];
+    [[NSUserDefaults standardUserDefaults] setBool:shuffleEnabled forKey:@"PlayerShuffleEnabled"];
     [self updateStatus:shuffleEnabled ? @"Shuffle on" : @"Shuffle off"];
 }
 
@@ -1350,16 +1380,28 @@
     NSString *title = filename;
     NSString *artist = @"";
     NSString *album = @"";
+    NSString *composer = @"";
+    NSString *genre = @"";
+    NSString *track = @"";
 
     if (urlAsset) {
         NSArray *metadata = [urlAsset commonMetadata];
         for (AVMetadataItem *item in metadata) {
-            if ([[item key] isEqual:AVMetadataCommonKeyTitle]) {
+            id key = [item key];
+            if (![key isKindOfClass:[NSString class]]) continue;
+
+            if ([key isEqual:AVMetadataCommonKeyTitle]) {
                 if ([item stringValue]) title = [item stringValue];
-            } else if ([[item key] isEqual:AVMetadataCommonKeyArtist]) {
+            } else if ([key isEqual:AVMetadataCommonKeyArtist]) {
                 if ([item stringValue]) artist = [item stringValue];
-            } else if ([[item key] isEqual:AVMetadataCommonKeyAlbumName]) {
+            } else if ([key isEqual:AVMetadataCommonKeyAlbumName]) {
                 if ([item stringValue]) album = [item stringValue];
+            } else if ([key isEqual:AVMetadataCommonKeyComposer]) {
+                if ([item stringValue]) composer = [item stringValue];
+            } else if ([key isEqual:AVMetadataCommonKeyGenre]) {
+                if ([item stringValue]) genre = [item stringValue];
+            } else if ([key isEqual:AVMetadataCommonKeyTrackNumber]) {
+                if ([item stringValue]) track = [item stringValue];
             }
         }
     }
@@ -1371,6 +1413,21 @@
     [titleLabel setStringValue:title];
     [artistLabel setStringValue:artist];
     [albumLabel setStringValue:album];
+
+    // Build a compact details line from genre | composer | track
+    NSMutableString *details = [NSMutableString string];
+    if ([genre length] > 0) {
+        [details appendString:genre];
+    }
+    if ([composer length] > 0) {
+        if ([details length] > 0) [details appendString:@"  ·  "];
+        [details appendString:composer];
+    }
+    if ([track length] > 0) {
+        if ([details length] > 0) [details appendString:@"  ·  "];
+        [details appendFormat:@"Track %@", track];
+    }
+    [detailsLabel setStringValue:details];
 
     [mainWindow setTitle:[NSString stringWithFormat:@"Player — %@", title]];
 }
@@ -1451,7 +1508,7 @@
                     keyDesc, NSStringFromClass([[item value] class]));
 
         if ([key isKindOfClass:[NSString class]] &&
-            [(NSString *)key isEqualToString:@"artwork"]) {
+            [(NSString *)key isEqualToString:AVMetadataCommonKeyArtwork]) {
             id value = [item value];
             if ([value isKindOfClass:[NSData class]]) {
                 NSData *data = (NSData *)value;
