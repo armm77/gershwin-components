@@ -1264,6 +1264,7 @@
 - (void)play
 {
     if (avPlayer) {
+        NSLog(@"Player: play via AVPlayer (%@)", currentFilePath);
         [avPlayer play];
         playbackState = PlayerPlaybackStatePlaying;
         [playButton setImage:[self iconPause]];
@@ -1275,7 +1276,11 @@
                                                              repeats:YES] retain];
         }
     } else if (audioPlayer) {
-        if ([audioPlayer play]) {
+        NSLog(@"Player: play via AVAudioPlayer (%@)", currentFilePath);
+        BOOL result = [audioPlayer play];
+        NSLog(@"Player: AVAudioPlayer play returned %d", result);
+        if (result) {
+            NSLog(@"Player: AVAudioPlayer isPlaying=%d", [audioPlayer isPlaying]);
             playbackState = PlayerPlaybackStatePlaying;
             [playButton setImage:[self iconPause]];
             if (!playbackTimer) {
@@ -1285,6 +1290,8 @@
                                                                 userInfo:nil
                                                                  repeats:YES] retain];
             }
+        } else {
+            NSLog(@"Player: AVAudioPlayer play returned NO, audio may be silent");
         }
     }
 }
