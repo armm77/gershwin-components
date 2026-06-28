@@ -53,6 +53,7 @@ typedef enum {
     NSRecursiveLock *lock;
     BOOL isAvailable;
     NSString *computerName;
+    NSMutableDictionary *backgroundPIDs; // pid_t by service type for standalone publishers
 }
 
 /**

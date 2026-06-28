@@ -138,7 +138,36 @@ static void cmd_set_hostname(const char *hostname)
         fclose(f);
     }
 #endif
-    
+
+    /* Restart or notify the mDNS daemon so it picks up the new hostname.
+     * Changing /etc/hostname + sethostname() does not propagate to
+     * avahi-daemon or mDNSResponder automatically.  Try every available
+     * service manager — SIGHUP via killall is a last resort because some
+     * Avahi versions don't re-read the hostname on SIGHUP. */
+#ifdef PLATFORM_LINUX
+    system("systemctl restart avahi-daemon 2>/dev/null || "
+           "systemctl restart systemd-resolved 2>/dev/null || "
+           "service avahi-daemon restart 2>/dev/null || "
+           "/etc/init.d/avahi-daemon restart 2>/dev/null || "
+           "rc-service avahi-daemon restart 2>/dev/null || "
+           "pkill -HUP -x avahi-daemon 2>/dev/null || true");
+#elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD)
+    system("/usr/sbin/service avahi-daemon restart 2>/dev/null || "
+           "/usr/sbin/service mdnsd restart 2>/dev/null || "
+           "pkill -HUP -x avahi-daemon mdnsd mDNSResponder 2>/dev/null || true");
+#elif defined(PLATFORM_OPENBSD)
+    system("/usr/sbin/rcctl restart avahi_daemon 2>/dev/null || "
+           "pkill -HUP -x avahi-daemon mdnsd mDNSResponder 2>/dev/null || true");
+#endif
+
+    /* Also try to explicitly publish the new hostname address so it
+     * resolves immediately even if Avahi's hostname registration
+     * hasn't picked up the change yet.  This runs as a background
+     * daemon that survives the helper's exit. */
+    system("avahi-publish-address -s $(hostname) "
+           "$(hostname -I 2>/dev/null | cut -d' ' -f1) "
+           ">/dev/null 2>&1 &");
+
     syslog(LOG_INFO, "sharing-helper: Hostname set to: %s", hostname);
     printf("Hostname set successfully\n");
     exit(0);
