@@ -409,17 +409,26 @@ static NSString *const kMicControl = @"Mic";
     // aplay -l lists every card the kernel registered, but cards without
     // a physically connected sink (e.g. HDMI with no display) fail at
     // open() with "audio open error".  We run aplay silently for 1 ms
-    // and capture stderr; any error *other* than "audio open error"
-    // means the device opened successfully (the format/data mismatch is
-    // expected since /dev/zero isn't valid audio).
+    // and capture stderr; any "audio open error" *other* than
+    // "Device or resource busy" means the sink is not connected.
+    // "Device or resource busy" means the device IS present — it is
+    // just being used by another process (e.g. currently playing audio),
+    // so we must not filter it out.
 
     NSString *probeId = [NSString stringWithFormat:@"hw:%d,%d",
                          device.cardIndex, device.deviceIndex];
     NSString *output = [self runCommandCaptureError:aplayPath
                                       withArguments:@[@"-D", probeId, @"-d", @"1",
                                                       @"-q", @"/dev/zero"]];
-    if (output && [output containsString:@"audio open error"]) {
-        return NO;
+    if (output) {
+        // Device or resource busy → physically present, just in use.
+        if ([output containsString:@"Device or resource busy"]) {
+            return YES;
+        }
+        // Any other open error means no physical sink is connected.
+        if ([output containsString:@"audio open error"]) {
+            return NO;
+        }
     }
     return YES;
 }
@@ -433,8 +442,13 @@ static NSString *const kMicControl = @"Mic";
     NSString *output = [self runCommandCaptureError:arecordPath
                                       withArguments:@[@"-D", probeId, @"-d", @"1",
                                                       @"-q", @"/dev/zero"]];
-    if (output && [output containsString:@"audio open error"]) {
-        return NO;
+    if (output) {
+        if ([output containsString:@"Device or resource busy"]) {
+            return YES;
+        }
+        if ([output containsString:@"audio open error"]) {
+            return NO;
+        }
     }
     return YES;
 }
