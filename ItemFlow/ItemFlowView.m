@@ -452,6 +452,12 @@ static dispatch_once_t onceTokenMissingLogged;
         NSInteger w = [bitmap pixelsWide];
         NSInteger h = [bitmap pixelsHigh];
         NSDebugLLog(@"gwcomp", @"[ItemFlow] createTextureFromImage: uploading texture w=%ld h=%ld alpha=%d", (long)w, (long)h, [bitmap hasAlpha]);
+
+        // Use 1-byte unpack alignment so that RGB images (3 bytes/pixel) with
+        // non-4-byte-multiple row widths upload correctly — without this,
+        // the default GL_UNPACK_ALIGNMENT of 4 misaligns every row, causing
+        // "interlaced" color artifacts (the "stripy" look on some icons).
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)w, (GLsizei)h,
                     0, format, GL_UNSIGNED_BYTE, data);
     } else {
