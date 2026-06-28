@@ -1380,7 +1380,32 @@
     // Determine which unit to use
     int unit = alertDevice ? alertDevice.cardIndex : defaultUnit;
 
-    return [self playSoundFile:sound.path onUnit:unit];
+    // --- Apply alert volume by temporarily scaling the output mixer ---
+    float savedVolume = -1.0;
+    if (cachedAlertVolume < 0.99) {
+        int current = [self getMixerChannelForUnit:unit channel:SOUND_MIXER_PCM];
+        if (current < 0) {
+            current = [self getMixerChannelForUnit:unit channel:SOUND_MIXER_VOLUME];
+        }
+        if (current > 0) {
+            savedVolume = current / 100.0;
+            int targetPercent = (int)(savedVolume * 100.0 * cachedAlertVolume);
+            if (targetPercent < 1) targetPercent = 1;
+
+            [self setMixerChannelForUnit:unit channel:SOUND_MIXER_PCM value:targetPercent];
+        }
+    }
+
+    BOOL success = [self playSoundFile:sound.path onUnit:unit];
+
+    // --- Restore original volume ---
+    if (savedVolume > 0) {
+        int restorePercent = (int)(savedVolume * 100.0);
+        if (restorePercent > 100) restorePercent = 100;
+        [self setMixerChannelForUnit:unit channel:SOUND_MIXER_PCM value:restorePercent];
+    }
+
+    return success;
 }
 
 - (BOOL)playSoundFile:(NSString *)path onUnit:(int)unit
@@ -1412,18 +1437,21 @@
             [NSString stringWithFormat:@"cat '%@' > %@", path, dspPath]]];
     }
 
+    BOOL success = YES;
     @try {
         [task launch];
-        NSDebugLLog(@"gwcomp", @"OSSBackend: Playing sound: %@", path);
+        [task waitUntilExit];
+        NSDebugLLog(@"gwcomp", @"OSSBackend: Played sound: %@", path);
     } @catch (NSException *e) {
         NSDebugLLog(@"gwcomp", @"OSSBackend: Failed to play sound: %@", e);
-        [task release];
-        NSBeep();
-        return NO;
+        success = NO;
     }
-
     [task release];
-    return YES;
+
+    if (!success) {
+        NSBeep();
+    }
+    return success;
 }
 
 - (AudioDevice *)alertSoundDevice
@@ -1494,6 +1522,10 @@
         [self setMixerChannelForUnit:device.cardIndex
                              channel:SOUND_MIXER_PCM
                                value:cachedOutputVolume > 0 ? cachedOutputVolume : 75];
+        // Play confirmation sound on the newly selected device
+        if (currentAlert) {
+            [self playAlertSound:currentAlert];
+        }
     }
 
     return success;

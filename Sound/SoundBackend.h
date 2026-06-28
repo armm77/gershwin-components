@@ -272,6 +272,9 @@ typedef NS_ENUM(NSInteger, AudioDeviceState) {
                                    onCard:(int)cardIndex;
 - (NSArray *)getAvailableALSAControls:(int)cardIndex;
 
+// Device in-use detection (which device is currently playing audio)
+- (AudioDevice *)currentlyInUseOutputDevice;
+
 // Bluetooth audio (for future expansion)
 - (NSArray *)bluetoothAudioDevices;
 - (BOOL)connectBluetoothDevice:(AudioDevice *)device;

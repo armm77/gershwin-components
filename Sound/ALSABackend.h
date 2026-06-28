@@ -50,9 +50,6 @@
     NSString *asoundrcPath;
     NSString *defaultsFilePath;
 
-    // Volume feedback task tracking
-    NSTask *currentFeedbackTask;
-
     // Deferred save timer (dispatch-based, replaces performSelector:afterDelay:)
     dispatch_source_t deferredSaveTimer;
 }
@@ -107,5 +104,9 @@
 // Device probing
 - (BOOL)isOutputDeviceUsable:(AudioDevice *)device;
 - (BOOL)isInputDeviceUsable:(AudioDevice *)device;
+
+// Device in-use detection
+- (AudioDevice *)currentlyInUseOutputDevice;
+- (BOOL)isDeviceCurrentlyPlaying:(AudioDevice *)device;
 
 @end

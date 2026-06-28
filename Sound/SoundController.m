@@ -779,8 +779,16 @@ static const CGFloat kTableRowHeight = 18.0;
     [outputMuteCheckbox setEnabled:hasDevices];
     [outputBalanceSlider setEnabled:hasDevices];
     
-    // Find and select the current/active device
-    AudioDevice *currentDevice = [backend defaultOutputDevice];
+    // Find and select the current/active device.
+    // Prefer the device that is currently playing audio (in-use),
+    // so the user sees the active playback device highlighted.
+    AudioDevice *currentDevice = nil;
+    if ([backend respondsToSelector:@selector(currentlyInUseOutputDevice)]) {
+        currentDevice = [backend currentlyInUseOutputDevice];
+    }
+    if (!currentDevice) {
+        currentDevice = [backend defaultOutputDevice];
+    }
     [selectedOutputDevice release];
     selectedOutputDevice = [currentDevice retain];
     

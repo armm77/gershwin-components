@@ -42,8 +42,6 @@ static NSString *const kMicControl = @"Mic";
         inputLevelTimer = nil;
         currentOutputCard = 0;
         currentInputCard = 0;
-        currentFeedbackTask = nil;
-        
         // Set up file paths
         NSString *home = NSHomeDirectory();
         asoundrcPath = [[home stringByAppendingPathComponent:@".asoundrc"] retain];
@@ -82,10 +80,6 @@ static NSString *const kMicControl = @"Mic";
     [alsactlPath release];
     [asoundrcPath release];
     [defaultsFilePath release];
-    if (currentFeedbackTask && [currentFeedbackTask isRunning]) {
-        [currentFeedbackTask terminate];
-    }
-    [currentFeedbackTask release];
     [super dealloc];
 }
 
@@ -496,6 +490,48 @@ static NSString *const kMicControl = @"Mic";
     [task release];
 
     return [result autorelease];
+}
+
+#pragma mark - Device In-Use Detection
+
+- (AudioDevice *)currentlyInUseOutputDevice
+{
+    for (AudioDevice *device in cachedOutputDevices) {
+        if ([self isDeviceCurrentlyPlaying:device]) {
+            return device;
+        }
+    }
+
+    // If no device says RUNNING, check for any that are not CLOSED/idle.
+    // A device that is open in hw_params but not yet streaming is still
+    // "in use" for our purposes.
+    for (AudioDevice *device in cachedOutputDevices) {
+        NSString *path = [NSString stringWithFormat:
+            @"/proc/asound/card%d/pcm%dp/sub0/hw_params",
+            device.cardIndex, device.deviceIndex];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            return device;
+        }
+    }
+
+    return nil;
+}
+
+- (BOOL)isDeviceCurrentlyPlaying:(AudioDevice *)device
+{
+    // Check /proc/asound/card<N>/pcm<D>p/sub0/status for RUNNING state.
+    // ALSA writes "state: RUNNING" when the PCM substream is actively
+    // playing audio, "state: CLOSED" or similar otherwise.
+    NSString *statusPath = [NSString stringWithFormat:
+        @"/proc/asound/card%d/pcm%dp/sub0/status",
+        device.cardIndex, device.deviceIndex];
+
+    NSString *status = [NSString stringWithContentsOfFile:statusPath
+                                                 encoding:NSUTF8StringEncoding
+                                                    error:NULL];
+    if (!status) return NO;
+
+    return ([status rangeOfString:@"state: RUNNING"].location != NSNotFound);
 }
 
 - (void)updateDeviceWithMixerControls:(AudioDevice *)device 
@@ -1453,51 +1489,71 @@ static NSString *const kMicControl = @"Mic";
 - (BOOL)playAlertSound:(AlertSound *)sound
 {
     NSDebugLLog(@"gwcomp", @"ALSABackend: playAlertSound: called");
-    NSDebugLLog(@"gwcomp", @"ALSABackend:   sound = %@, name = %@, path = %@", 
-          sound, sound.name, sound.path);
-    
+
     if (!sound) {
-        NSDebugLLog(@"gwcomp", @"ALSABackend:   sound is nil, calling NSBeep()");
-        // Play system beep
         NSBeep();
         return YES;
     }
-    
-    if (sound.path && [[NSFileManager defaultManager] fileExistsAtPath:sound.path]) {
-        // Use aplay to play the sound
-        // Use plughw: instead of hw: to allow concurrent access via dmix
-        NSString *device = defaultOutput ?
-                          [NSString stringWithFormat:@"plughw:%d", currentOutputCard] :
-                          @"default";
-        
-        NSDebugLLog(@"gwcomp", @"ALSABackend:   playing file: %@", sound.path);
-        NSDebugLLog(@"gwcomp", @"ALSABackend:   using device: %@, aplayPath: %@", device, aplayPath);
-        
-        // Run aplay in background
-        NSTask *task = [[NSTask alloc] init];
-        [task setLaunchPath:aplayPath];
-        [task setArguments:@[@"-D", device, @"-q", sound.path]];
 
-        @try {
-            [task launch];
-            NSDebugLLog(@"gwcomp", @"ALSABackend:   aplay launched successfully");
-        } @catch (NSException *e) {
-            NSDebugLLog(@"gwcomp", @"ALSABackend:   Failed to play sound: %@", e);
-            [task release];
-            NSBeep();
-            return NO;
-        }
-
-        // Track the task so it can be terminated if needed
-        [currentFeedbackTask release];
-        currentFeedbackTask = task;
+    if (!sound.path || ![[NSFileManager defaultManager] fileExistsAtPath:sound.path]) {
+        NSBeep();
         return YES;
     }
-    
-    NSDebugLLog(@"gwcomp", @"ALSABackend:   no valid path, falling back to NSBeep()");
-    // Fall back to system beep
-    NSBeep();
-    return YES;
+
+    NSString *device = defaultOutput ?
+        [NSString stringWithFormat:@"plughw:%d", currentOutputCard] : @"default";
+
+    // --- Apply alert volume by temporarily scaling the output mixer ---
+    float savedVolume = -1.0;
+    NSString *mixerControl = nil;
+
+    if (cachedAlertVolume < 0.99 && defaultOutput) {
+        mixerControl = [self preferredMixerControlNameForDevice:defaultOutput isOutput:YES];
+        if (!mixerControl) mixerControl = kMasterControl;
+
+        NSString *output = [self runCommand:amixerPath
+                              withArguments:@[@"-c",
+                                [NSString stringWithFormat:@"%d", currentOutputCard],
+                                @"sget", mixerControl]];
+        if (output) {
+            savedVolume = [self parseVolumeFromMixerOutput:output];
+            float targetVol = savedVolume * cachedAlertVolume;
+            if (targetVol < 0.02) targetVol = 0.02;
+
+            int percent = (int)(targetVol * 100.0);
+            if (percent < 1) percent = 1;
+            NSString *value = [NSString stringWithFormat:@"%d%%", percent];
+            [self setMixerControl:mixerControl value:value card:currentOutputCard];
+        }
+    }
+
+    // --- Play the sound (synchronously on the calling queue) ---
+    NSTask *task = [[NSTask alloc] init];
+    [task setLaunchPath:aplayPath];
+    [task setArguments:@[@"-D", device, @"-q", sound.path]];
+
+    BOOL success = YES;
+    @try {
+        [task launch];
+        [task waitUntilExit];
+    } @catch (NSException *e) {
+        NSDebugLLog(@"gwcomp", @"ALSABackend:   aplay failed: %@", e);
+        success = NO;
+    }
+    [task release];
+
+    // --- Restore original volume ---
+    if (savedVolume >= 0 && mixerControl) {
+        int percent = (int)(savedVolume * 100.0);
+        NSString *value = [NSString stringWithFormat:@"%d%%", percent];
+        [self setMixerControl:mixerControl value:value card:currentOutputCard];
+    }
+
+    if (!success) {
+        NSBeep();
+    }
+
+    return success;
 }
 
 - (AudioDevice *)alertSoundDevice
@@ -1541,14 +1597,10 @@ static NSString *const kMicControl = @"Mic";
 
 - (void)playVolumeFeedback
 {
-    // Terminate any previous feedback sound to prevent process pile-up
-    if (currentFeedbackTask && [currentFeedbackTask isRunning]) {
-        [currentFeedbackTask terminate];
-    }
-    [currentFeedbackTask release];
-    currentFeedbackTask = nil;
-
-    // Play a short blip sound to indicate volume change
+    // Play a short blip sound to indicate volume change.
+    // With synchronous playback on the serial backend queue,
+    // there is no risk of overlapping sounds, so no task
+    // tracking is needed.
     if (currentAlert && currentAlert.path) {
         [self playAlertSound:currentAlert];
     } else {
@@ -1683,7 +1735,12 @@ static NSString *const kMicControl = @"Mic";
     
     // Step 4: Update default device settings
     [self setDefaultOutputDevice:device];
-    
+
+    // Step 5: Play confirmation sound on the newly selected device
+    if (currentAlert) {
+        [self playAlertSound:currentAlert];
+    }
+
     NSDebugLLog(@"gwcomp", @"ALSABackend: forceImmediateOutputDeviceSwitch: SUCCESS");
     return YES;
 }
