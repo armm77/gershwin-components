@@ -21,17 +21,23 @@
 #import <Foundation/NSTimer.h>
 #import <Foundation/NSArray.h>
 #import "ItemFlowView.h"
+#import "RadioStation.h"
 
 // Forward declarations for internal methods used by DropTargetView
 @interface PlayerController () // class extension
 - (void)restoreWindowTitle;
 - (void)handleDroppedFiles:(NSArray *)filePaths;
 - (NSArray *)scanFolderForMediaFiles:(NSString *)folderPath;
+- (void)layoutRadioMode;
+- (void)radioStop:(id)sender;
+- (void)radioPlaySelected;
+- (void)radioPreviousStation;
+- (void)radioNextStation;
 @end
 
 // Default window size (content rect, excl. titlebar)
 #define DEFAULT_WINDOW_WIDTH   520.0
-#define DEFAULT_WINDOW_HEIGHT  370.0
+#define DEFAULT_WINDOW_HEIGHT  592.0
 
 // Minimum content area size
 #define PLAYER_CONTENT_MIN_WIDTH   METRICS_WIN_MIN_WIDTH
@@ -152,6 +158,20 @@
         repeatEnabled = [defaults boolForKey:@"PlayerRepeatEnabled"];
         shuffleEnabled = [defaults boolForKey:@"PlayerShuffleEnabled"];
         coverAreaHeight = 200.0;
+        playerMode = PlayerModeLocal;
+        radioInitialized = NO;
+        localVolume = 0.8;
+        radioVolume = 0.8;
+        // Restore persisted settings
+        if ([defaults objectForKey:@"PlayerLocalVolume"]) {
+            localVolume = [defaults floatForKey:@"PlayerLocalVolume"];
+        }
+        if ([defaults objectForKey:@"PlayerRadioVolume"]) {
+            radioVolume = [defaults floatForKey:@"PlayerRadioVolume"];
+        }
+        if ([defaults objectForKey:@"PlayerMode"]) {
+            playerMode = [defaults integerForKey:@"PlayerMode"];
+        }
     }
     return self;
 }
@@ -185,6 +205,16 @@
     [coverImages release];
     [detailsLabel release];
     [overlayBar release];
+    [searchField release];
+    [statusLabel release];
+    [radioTextLabel release];
+    [volumeLabel release];
+    [volumeSlider release];
+    [muteCheckbox release];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(checkDebounce)
+                                               object:nil];
+    [_pendingRadioStation release];
     [super dealloc];
 }
 
@@ -309,11 +339,13 @@
     [nextItem setTarget:self];
     [nextItem setKeyEquivalentModifierMask:NSCommandKeyMask];
     [playbackMenu addItem:[NSMenuItem separatorItem]];
-    repeatMenuItem = (NSMenuItem *)
-        [playbackMenu addItemWithTitle:@"Repeat"
-                                action:@selector(toggleRepeat:)
-                         keyEquivalent:@"r"];
-    [repeatMenuItem setTarget:self];
+    NSMenuItem *repeatItem = [[NSMenuItem alloc] initWithTitle:@"Repeat"
+                                                        action:@selector(toggleRepeat:)
+                                                 keyEquivalent:@"R"];
+    [repeatItem setTarget:self];
+    [playbackMenu addItem:repeatItem];
+    repeatMenuItem = repeatItem;
+    [repeatItem release];
     [repeatMenuItem setState:repeatEnabled ? NSOnState : NSOffState];
     shuffleMenuItem = (NSMenuItem *)
         [playbackMenu addItemWithTitle:@"Shuffle"
@@ -336,39 +368,53 @@
                             action:@selector(toggleFullscreen:)
                      keyEquivalent:@"f"];
     [fsItem setTarget:self];
-    [[viewMenu addItemWithTitle:@"Zoom"
-                         action:@selector(performZoom:)
-                  keyEquivalent:@""] setTarget:mainWindow];
     [viewMenuItem setSubmenu:viewMenu];
     [mainMenu addItem:viewMenuItem];
     [viewMenu release];
     [viewMenuItem release];
 
-    // ===== WINDOW MENU =====
-    NSMenuItem *windowMenuItem = [[NSMenuItem alloc] initWithTitle:@"Window"
+    // ===== RADIO MENU =====
+    NSMenuItem *radioMenuItem = [[NSMenuItem alloc] initWithTitle:@"Radio"
                                                            action:NULL
                                                     keyEquivalent:@""];
-    NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
-    [windowMenu addItemWithTitle:@"Minimize"
-                          action:@selector(performMiniaturize:)
-                   keyEquivalent:@"m"];
-    [windowMenuItem setSubmenu:windowMenu];
-    [mainMenu addItem:windowMenuItem];
-    [windowMenu release];
-    [windowMenuItem release];
+    NSMenu *radioMenu = [[NSMenu alloc] initWithTitle:@"Radio"];
 
-    // ===== HELP MENU =====
-    NSMenuItem *helpMenuItem = [[NSMenuItem alloc] initWithTitle:@"Help"
-                                                         action:NULL
-                                                  keyEquivalent:@""];
-    NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
-    [helpMenu addItemWithTitle:@"Player Help"
-                        action:nil
-                 keyEquivalent:@"?"];
-    [helpMenuItem setSubmenu:helpMenu];
-    [mainMenu addItem:helpMenuItem];
-    [helpMenu release];
-    [helpMenuItem release];
+    // Browse Radio Stations — Cmd+R (Repeat moved to Cmd+Shift+R to avoid conflict)
+    radioModeMenuItem = (NSMenuItem *)
+        [radioMenu addItemWithTitle:@"Browse Radio Stations"
+                             action:@selector(toggleRadioMode:)
+                      keyEquivalent:@"r"];
+    [radioModeMenuItem setTarget:self];
+    [radioModeMenuItem setKeyEquivalentModifierMask:NSCommandKeyMask];
+
+    // Open Radio Stream — Cmd+U
+    [radioMenu addItemWithTitle:@"Open Radio Stream..."
+                         action:@selector(openRadioStream:)
+                  keyEquivalent:@"u"];
+    [[radioMenu itemAtIndex:[radioMenu numberOfItems] - 1] setTarget:self];
+    [[radioMenu itemAtIndex:[radioMenu numberOfItems] - 1]
+        setKeyEquivalentModifierMask:NSCommandKeyMask];
+
+    // Separator
+    [radioMenu addItem:[NSMenuItem separatorItem]];
+
+    // Stop Radio — Cmd+.
+    [radioMenu addItemWithTitle:@"Stop Radio"
+                         action:@selector(radioStop:)
+                  keyEquivalent:@"."];
+    [[radioMenu itemAtIndex:[radioMenu numberOfItems] - 1] setTarget:self];
+    [[radioMenu itemAtIndex:[radioMenu numberOfItems] - 1]
+        setKeyEquivalentModifierMask:NSCommandKeyMask];
+
+    // Tagged separator for dynamic station list (rebuildRadioStationMenu adds items after this)
+    NSMenuItem *stationSep = (NSMenuItem *)[NSMenuItem separatorItem];
+    [stationSep setTag:9999];
+    [radioMenu addItem:stationSep];
+
+    [radioMenuItem setSubmenu:radioMenu];
+    [mainMenu addItem:radioMenuItem];
+    [radioMenu release];
+    [radioMenuItem release];
 
     [NSApp setMainMenu:mainMenu];
     [mainMenu release];
@@ -553,6 +599,65 @@
     [detailsLabel setFont:METRICS_FONT_SYSTEM_REGULAR_11];
     [contentView addSubview:detailsLabel];
 
+    // ===== RADIO MODE UI ELEMENTS (hidden initially) =====
+    searchField = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    [[searchField cell] setPlaceholderString:@"Search Radio Stations..."];
+    [searchField setTarget:self];
+    [searchField setAction:@selector(radioSearchAction:)];
+    [searchField setHidden:YES];
+    [contentView addSubview:searchField];
+
+    statusLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    [statusLabel setStringValue:@""];
+    [statusLabel setEditable:NO];
+    [statusLabel setSelectable:NO];
+    [statusLabel setBezeled:NO];
+    [statusLabel setDrawsBackground:NO];
+    [statusLabel setAlignment:NSTextAlignmentCenter];
+    [statusLabel setFont:METRICS_FONT_SYSTEM_REGULAR_11];
+    [statusLabel setHidden:YES];
+    [contentView addSubview:statusLabel];
+
+    radioTextLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    [radioTextLabel setStringValue:@""];
+    [radioTextLabel setEditable:NO];
+    [radioTextLabel setSelectable:NO];
+    [radioTextLabel setBezeled:NO];
+    [radioTextLabel setDrawsBackground:NO];
+    [radioTextLabel setAlignment:NSTextAlignmentCenter];
+    [radioTextLabel setFont:METRICS_FONT_SYSTEM_REGULAR_11];
+    [[radioTextLabel cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    [radioTextLabel setHidden:YES];
+    [contentView addSubview:radioTextLabel];
+
+    volumeLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    [volumeLabel setStringValue:@"Volume:"];
+    [volumeLabel setEditable:NO];
+    [volumeLabel setSelectable:NO];
+    [volumeLabel setBezeled:NO];
+    [volumeLabel setDrawsBackground:NO];
+    [volumeLabel setFont:METRICS_FONT_SYSTEM_REGULAR_11];
+    [volumeLabel setHidden:YES];
+    [contentView addSubview:volumeLabel];
+
+    volumeSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
+    [volumeSlider setMinValue:0.0];
+    [volumeSlider setMaxValue:1.0];
+    [volumeSlider setDoubleValue:localVolume];
+    [volumeSlider setContinuous:YES];
+    [volumeSlider setTarget:self];
+    [volumeSlider setAction:@selector(radioVolumeChanged:)];
+    [volumeSlider setHidden:YES];
+    [contentView addSubview:volumeSlider];
+
+    muteCheckbox = [[NSButton alloc] initWithFrame:NSZeroRect];
+    [muteCheckbox setButtonType:NSSwitchButton];
+    [muteCheckbox setTitle:@"Mute"];
+    [muteCheckbox setTarget:self];
+    [muteCheckbox setAction:@selector(radioMuteToggled:)];
+    [muteCheckbox setHidden:YES];
+    [contentView addSubview:muteCheckbox];
+
     // Initial layout
     [self layoutSubviews];
 }
@@ -677,12 +782,19 @@
 
 - (void)layoutNormalMode
 {
+    // In radio mode, use a completely different layout
+    if (playerMode == PlayerModeRadio) {
+        [self layoutRadioMode];
+        return;
+    }
+
     NSView *content = [mainWindow contentView];
     NSRect bounds = [content bounds];
     CGFloat W = bounds.size.width;
     CGFloat H = bounds.size.height;
+    CGFloat margin = METRICS_CONTENT_SIDE_MARGIN;
 
-    // Restore controls hidden by fullscreen mode
+    // Restore controls that might be hidden from fullscreen
     [currentTimeLabel setHidden:NO];
     [timeSlider setHidden:NO];
     [totalTimeLabel setHidden:NO];
@@ -696,10 +808,13 @@
     [artistLabel setHidden:NO];
     [albumLabel setHidden:NO];
     [detailsLabel setHidden:NO];
+    [volumeLabel setHidden:NO];
+    [volumeSlider setHidden:NO];
+    [muteCheckbox setHidden:NO];
 
     // ---- Cover / video area (COVER_AREA_FRACTION) ----
     coverAreaHeight = MAX(120.0, floorf(H * COVER_AREA_FRACTION));
-    CGFloat coverBottom = H - coverAreaHeight; // top of content below cover
+    CGFloat coverBottom = H - coverAreaHeight;
     NSRect coverFrame = NSMakeRect(0, coverBottom, W, coverAreaHeight);
     [flowView setFrame:coverFrame];
     [videoView setFrame:coverFrame];
@@ -710,73 +825,100 @@
         NSMidX(coverFrame) - spinSize.width / 2.0,
         NSMidY(coverFrame) - spinSize.height / 2.0)];
 
-    CGFloat margin = METRICS_CONTENT_SIDE_MARGIN;
-    CGFloat y = coverBottom;  // descending cursor
-
-    // ---- Metadata area (directly below cover) ----
-    y -= METRICS_SPACE_12;
-    CGFloat metaW = W - 2 * margin;
+    // ---- Build content below cover from bottom up ----
+    // Content heights
     CGFloat lineH = 15.0;
     CGFloat lineGap = 1.0;
+    CGFloat metaH = 4 * lineH + 3 * lineGap;   // ~~63
+    CGFloat sliderRowH = 16.0;
+    CGFloat ctrlH = CONTROL_BAR_HEIGHT;         // 22
+    CGFloat volH = 22.0;
+    CGFloat bottomH = METRICS_BUTTON_HEIGHT;    // 20
 
-    y -= lineH;
-    [titleLabel setFrame:NSMakeRect(margin, y, metaW, lineH)];
-    [titleLabel setAutoresizingMask:NSViewWidthSizable];
+    // Vertical gaps between sections, using AppearanceMetrics spacing
+    CGFloat gapMeta  = METRICS_SPACE_12;   // cover → metadata
+    CGFloat gapTimer = METRICS_SPACE_8;    // metadata → time slider
+    CGFloat gapCtrl  = METRICS_SPACE_12;   // time slider → playback buttons
+    CGFloat gapVol   = METRICS_SPACE_12;   // playback buttons → volume
+    CGFloat gapBot   = METRICS_SPACE_12;   // volume → bottom buttons
 
-    y -= lineGap + lineH;
-    [artistLabel setFrame:NSMakeRect(margin, y, metaW, lineH)];
-    [artistLabel setAutoresizingMask:NSViewWidthSizable];
+    CGFloat neededBelow = gapMeta + metaH + gapTimer + sliderRowH + gapCtrl
+                          + ctrlH + gapVol + volH + gapBot + bottomH
+                          + METRICS_CONTENT_BOTTOM_MARGIN;
 
-    y -= lineGap + lineH;
-    [albumLabel setFrame:NSMakeRect(margin, y, metaW, lineH)];
-    [albumLabel setAutoresizingMask:NSViewWidthSizable];
+    CGFloat availableBelow = coverBottom;
+    CGFloat extraSpace = availableBelow - neededBelow;
+    if (extraSpace < 0) extraSpace = 0;
 
-    y -= lineGap + lineH;
-    [detailsLabel setFrame:NSMakeRect(margin, y, metaW, lineH)];
-    [detailsLabel setAutoresizingMask:NSViewWidthSizable];
+    // Start at bottom margin, ascend
+    CGFloat by = METRICS_CONTENT_BOTTOM_MARGIN + floorf(extraSpace * 0.15f);
 
-    // ---- Time slider row ----
-    y -= METRICS_SPACE_8;
-    CGFloat timeLabelW = 42.0;
-    CGFloat sliderW = W - 2 * margin - 2 * timeLabelW - 8;
+    // ---- Bottom row: Open, Fullscreen ----
+    CGFloat openW = 68.0;
+    CGFloat fsBtnW = 28.0;
+    [openButton setFrame:NSMakeRect(margin, by, openW, bottomH)];
+    [openButton setAutoresizingMask:NSViewMaxXMargin];
 
-    [currentTimeLabel setFrame:NSMakeRect(margin, y, timeLabelW, 16)];
-    [currentTimeLabel setAutoresizingMask:NSViewMaxXMargin];
+    CGFloat rightEdge = W - margin;
+    [fullscreenButton setFrame:NSMakeRect(rightEdge - fsBtnW, by, fsBtnW, bottomH)];
+    [fullscreenButton setAutoresizingMask:NSViewMinXMargin];
+    by += bottomH + gapBot;
 
-    [timeSlider setFrame:NSMakeRect(margin + timeLabelW + 4, y, sliderW, SLIDER_BAR_HEIGHT)];
-    [timeSlider setAutoresizingMask:NSViewWidthSizable];
+    // ---- Volume slider row ----
+    CGFloat volLabelW = 55.0;
+    CGFloat maxVolSlider = W - margin - (margin + volLabelW + METRICS_SPACE_8 + 68 + METRICS_SPACE_8);
+    CGFloat volSliderW = MIN(180.0, maxVolSlider);
+    CGFloat muteW = 60.0;
 
-    [totalTimeLabel setFrame:NSMakeRect(margin + timeLabelW + 4 + sliderW + 4, y, timeLabelW, 16)];
-    [totalTimeLabel setAutoresizingMask:NSViewMinXMargin];
-    y -= SLIDER_BAR_HEIGHT;
+    [volumeLabel setFrame:NSMakeRect(margin, by, volLabelW, volH)];
+    [volumeSlider setFrame:NSMakeRect(margin + volLabelW + METRICS_SPACE_8, by, volSliderW, volH)];
+    [volumeSlider setAutoresizingMask:NSViewWidthSizable];
+    [muteCheckbox setFrame:NSMakeRect(NSMaxX([volumeSlider frame]) + METRICS_SPACE_8, by + 2, muteW, 18)];
+    by += volH + gapVol;
 
     // ---- Playback controls row (centered) ----
-    y -= METRICS_SPACE_12;
     CGFloat btnW = 36.0;
-    CGFloat btnH = CONTROL_BAR_HEIGHT;
+    CGFloat btnH = ctrlH;
     CGFloat gap = 6.0;
     CGFloat fourBtnW = 4 * btnW + 3 * gap;
     CGFloat ctrlStartX = floorf((W - fourBtnW) / 2.0);
 
-    [previousButton setFrame:NSMakeRect(ctrlStartX, y, btnW, btnH)];
-    [playButton setFrame:NSMakeRect(ctrlStartX + btnW + gap, y, btnW, btnH)];
-    [stopButton setFrame:NSMakeRect(ctrlStartX + 2 * (btnW + gap), y, btnW, btnH)];
-    [nextButton setFrame:NSMakeRect(ctrlStartX + 3 * (btnW + gap), y, btnW, btnH)];
-    y -= btnH;
+    [previousButton setFrame:NSMakeRect(ctrlStartX, by, btnW, btnH)];
+    [playButton setFrame:NSMakeRect(ctrlStartX + btnW + gap, by, btnW, btnH)];
+    [stopButton setFrame:NSMakeRect(ctrlStartX + 2 * (btnW + gap), by, btnW, btnH)];
+    [nextButton setFrame:NSMakeRect(ctrlStartX + 3 * (btnW + gap), by, btnW, btnH)];
+    by += btnH + gapCtrl;
 
-    // ---- Bottom row: Open, Fullscreen ----
-    y -= METRICS_SPACE_12;
-    CGFloat bottomBtnH = METRICS_BUTTON_HEIGHT;
-    CGFloat openW = 68.0;
-    CGFloat fsBtnW = 28.0;
+    // ---- Time slider row ----
+    CGFloat timeLabelW = 42.0;
+    CGFloat sliderW = W - 2 * margin - 2 * timeLabelW - METRICS_SPACE_8;
 
-    [openButton setFrame:NSMakeRect(margin, y, openW, bottomBtnH)];
-    [openButton setAutoresizingMask:NSViewMaxXMargin];
+    [currentTimeLabel setFrame:NSMakeRect(margin, by, timeLabelW, sliderRowH)];
+    [currentTimeLabel setAutoresizingMask:NSViewMaxXMargin];
 
-    // Fullscreen button on the right
-    CGFloat rightEdge = W - margin;
-    [fullscreenButton setFrame:NSMakeRect(rightEdge - fsBtnW, y, fsBtnW, bottomBtnH)];
-    [fullscreenButton setAutoresizingMask:NSViewMinXMargin];
+    [timeSlider setFrame:NSMakeRect(margin + timeLabelW + 4, by, sliderW, sliderRowH)];
+    [timeSlider setAutoresizingMask:NSViewWidthSizable];
+
+    [totalTimeLabel setFrame:NSMakeRect(margin + timeLabelW + 4 + sliderW + 4, by, timeLabelW, sliderRowH)];
+    [totalTimeLabel setAutoresizingMask:NSViewMinXMargin];
+    by += sliderRowH + gapTimer;
+
+    // ---- Metadata labels ----
+    CGFloat metaW = W - 2 * margin;
+    [titleLabel setFrame:NSMakeRect(margin, by, metaW, lineH)];
+    [titleLabel setAutoresizingMask:NSViewWidthSizable];
+    by += lineH + lineGap;
+
+    [artistLabel setFrame:NSMakeRect(margin, by, metaW, lineH)];
+    [artistLabel setAutoresizingMask:NSViewWidthSizable];
+    by += lineH + lineGap;
+
+    [albumLabel setFrame:NSMakeRect(margin, by, metaW, lineH)];
+    [albumLabel setAutoresizingMask:NSViewWidthSizable];
+    by += lineH + lineGap;
+
+    [detailsLabel setFrame:NSMakeRect(margin, by, metaW, lineH)];
+    [detailsLabel setAutoresizingMask:NSViewWidthSizable];
 
     // Hide overlay if in normal mode
     if (overlayBar && ![overlayBar isHidden]) {
@@ -818,6 +960,7 @@
     [artistLabel setHidden:YES];
     [albumLabel setHidden:YES];
     [detailsLabel setHidden:YES];
+    [radioTextLabel setHidden:YES];
 
     // Create overlay bar if needed
     if (!overlayBar) {
@@ -1026,6 +1169,18 @@
 
 #pragma mark - Application Delegate
 
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem
+{
+    if (menuItem == radioModeMenuItem) {
+        NSString *correctTitle = (playerMode == PlayerModeRadio)
+            ? @"Exit Radio Mode" : @"Browse Radio Stations";
+        if (![[menuItem title] isEqualToString:correctTitle]) {
+            [menuItem setTitle:correctTitle];
+        }
+    }
+    return YES;
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     NSArray *arguments = [[NSProcessInfo processInfo] arguments];
@@ -1033,6 +1188,15 @@
     [NSApp setDelegate:self];
 
     [self createUI];
+
+    // Restore persisted volume slider for the current mode
+    [volumeSlider setDoubleValue:(playerMode == PlayerModeRadio) ? radioVolume : localVolume];
+
+    // Restore persisted radio mode — reset guard so enterRadioMode runs
+    if (playerMode == PlayerModeRadio) {
+        playerMode = PlayerModeLocal;
+        [self enterRadioMode];
+    }
 
     if ([arguments count] > 1) {
         [self handleCommandLineArguments];
@@ -1080,16 +1244,32 @@
 
 - (IBAction)playPause:(id)sender
 {
+    if (playerMode == PlayerModeRadio) {
+        if ([[RadioManager sharedManager] isPlaying]) {
+            [[RadioManager sharedManager] stop];
+        } else {
+            [self radioPlaySelected];
+        }
+        return;
+    }
     [self togglePlayPause];
 }
 
 - (IBAction)stop:(id)sender
 {
+    if (playerMode == PlayerModeRadio) {
+        [self radioStop:sender];
+        return;
+    }
     [self stopPlayback];
 }
 
 - (IBAction)previousTrack:(id)sender
 {
+    if (playerMode == PlayerModeRadio) {
+        [self radioPreviousStation];
+        return;
+    }
     if ([playlist count] == 0) return;
 
     int newIndex;
@@ -1112,6 +1292,10 @@
 
 - (IBAction)nextTrack:(id)sender
 {
+    if (playerMode == PlayerModeRadio) {
+        [self radioNextStation];
+        return;
+    }
     if ([playlist count] == 0) return;
 
     int newIndex;
@@ -1247,7 +1431,7 @@
             return;
         }
 
-        [audioPlayer setVolume:0.8];
+        [audioPlayer setVolume:localVolume];
     }
 
     [self updateMetadata];
@@ -1429,18 +1613,27 @@
     }
     [detailsLabel setStringValue:details];
 
-    [mainWindow setTitle:[NSString stringWithFormat:@"Player — %@", title]];
+    [mainWindow setTitle:[NSString stringWithFormat:@"Player - %@", title]];
 }
 
 #pragma mark - ItemFlowView Data Source
 
 - (NSUInteger)numberOfItemsInItemFlowView:(ItemFlowView *)view
 {
+    if (playerMode == PlayerModeRadio) {
+        return [[[RadioManager sharedManager] stations] count];
+    }
     return [playlist count];
 }
 
 - (NSImage *)itemFlowView:(ItemFlowView *)view imageAtIndex:(NSUInteger)index
 {
+    if (playerMode == PlayerModeRadio) {
+        NSArray *stations = [[RadioManager sharedManager] stations];
+        if (index >= [stations count]) return nil;
+        RadioStation *station = [stations objectAtIndex:index];
+        return [[RadioManager sharedManager] imageForStation:station];
+    }
     if (index >= [playlist count]) return nil;
     NSString *path = [playlist objectAtIndex:index];
     return [coverImages objectForKey:path];
@@ -1450,6 +1643,12 @@
 
 - (void)itemFlowView:(ItemFlowView *)view didSelectItemAtIndex:(NSUInteger)index
 {
+    if (playerMode == PlayerModeRadio) {
+        NSArray *stations = [[RadioManager sharedManager] stations];
+        if (index >= [stations count]) return;
+        [self schedulePlayStation:[stations objectAtIndex:index]];
+        return;
+    }
     // Suppress re-selection of the already-playing track
     if ((int)index == currentIndex && playbackState != PlayerPlaybackStateStopped) {
         return;
@@ -1457,6 +1656,84 @@
     if (index < [playlist count]) {
         [self playFromPlaylistAtIndex:(int)index];
     }
+}
+
+/// Schedule a radio station for playback after the debounce delay.
+/// All station selection paths (ItemFlow, menu, prev/next, search) route
+/// through here so that rapid selections don't restart the stream each time.
+- (void)schedulePlayStation:(RadioStation *)station
+{
+    if (!station) return;
+
+    RadioManager *rm = [RadioManager sharedManager];
+
+    // Skip if already playing this station
+    if ([rm isPlaying] && [[rm currentStationName] isEqualToString:[station name]]) {
+        return;
+    }
+
+    // Ensure we're in radio mode
+    if (playerMode != PlayerModeRadio) {
+        [self enterRadioMode];
+    }
+
+    // Debounce: update pending station and reset the idle timer.
+    // As long as selections keep coming within 500ms, checkDebounce will
+    // keep rescheduling itself and never fire the actual playback.
+    if (_pendingRadioStation != station) {
+        [_pendingRadioStation release];
+        _pendingRadioStation = [station retain];
+    }
+    _lastSelectionTime = [[NSDate date] timeIntervalSince1970];
+
+    if (!_debounceScheduled) {
+        _debounceScheduled = YES;
+        [self performSelector:@selector(checkDebounce)
+                   withObject:nil
+                   afterDelay:0.5];
+    }
+}
+
+- (void)checkDebounce
+{
+    _debounceScheduled = NO;
+
+    // If a new selection came in while we were waiting, reschedule
+    NSTimeInterval elapsed = [[NSDate date] timeIntervalSince1970] - _lastSelectionTime;
+    if (elapsed < 0.499) {  // fudge for floating-point
+        _debounceScheduled = YES;
+        NSTimeInterval remaining = 0.5 - elapsed;
+        if (remaining < 0.01) remaining = 0.01;
+        [self performSelector:@selector(checkDebounce)
+                   withObject:nil
+                   afterDelay:remaining];
+        return;
+    }
+
+    [self fireDebouncedStation];
+}
+
+- (void)fireDebouncedStation
+{
+    _debounceScheduled = NO;
+
+    if (!_pendingRadioStation) return;
+    RadioManager *rm = [RadioManager sharedManager];
+
+    // Skip if already playing this station
+    if ([rm isPlaying] && [[rm currentStationName] isEqualToString:[_pendingRadioStation name]]) {
+        [_pendingRadioStation release];
+        _pendingRadioStation = nil;
+        return;
+    }
+
+    // Optimistically update button to playing state before stream starts
+    [playButton setImage:[self iconPause]];
+    [stopButton setEnabled:YES];
+    [rm playStation:_pendingRadioStation];
+
+    [_pendingRadioStation release];
+    _pendingRadioStation = nil;
 }
 
 #pragma mark - Cover Art Extraction
@@ -1547,30 +1824,64 @@
 
     NSDebugLLog(@"gwcomp", @"[Player] loadCoverArtForAllPlaylistItems: %ld items", (long)count);
 
-    // Extract any covers we don't have yet
+    // Collect paths that still need a cover
+    NSMutableArray *pathsToExtract = [NSMutableArray array];
     for (NSInteger i = 0; i < count; i++) {
         NSString *path = [playlist objectAtIndex:i];
         if ([coverImages objectForKey:path] == nil) {
-            NSImage *cover = [self extractCoverArtForFile:path];
-            if (cover) {
-                [coverImages setObject:cover forKey:path];
+            [pathsToExtract addObject:path];
+        }
+    }
+
+    // If all covers are already cached, just refresh textures on main
+    if ([pathsToExtract count] == 0) {
+        [flowView setItemCount:(NSUInteger)count];
+        NSMutableIndexSet *indices = [NSMutableIndexSet indexSet];
+        for (NSInteger i = 0; i < count; i++) {
+            if ([coverImages objectForKey:[playlist objectAtIndex:i]]) {
+                [indices addIndex:(NSUInteger)i];
             }
         }
-    }
-
-    // Grow the view's item array without destroying existing textures
-    [flowView setItemCount:count];
-
-    // Load textures for every index that has a cached cover
-    NSMutableIndexSet *indices = [NSMutableIndexSet indexSet];
-    for (NSInteger i = 0; i < count; i++) {
-        if ([coverImages objectForKey:[playlist objectAtIndex:i]]) {
-            [indices addIndex:i];
+        if ([indices count] > 0) {
+            [flowView updateTexturesForIndices:indices];
         }
+        return;
     }
-    if ([indices count] > 0) {
-        [flowView updateTexturesForIndices:indices];
-    }
+
+    // Retain for MRC — released in the main-thread callback
+    [pathsToExtract retain];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+        @autoreleasepool {
+            // Extract covers on background thread
+            NSMutableDictionary *newCovers = [NSMutableDictionary dictionary];
+            for (NSString *path in pathsToExtract) {
+                NSImage *cover = [self extractCoverArtForFile:path];
+                if (cover) {
+                    [newCovers setObject:cover forKey:path];
+                }
+            }
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // Merge extracted covers into the cache
+                for (NSString *path in newCovers) {
+                    [coverImages setObject:[newCovers objectForKey:path] forKey:path];
+                }
+                [pathsToExtract release];
+
+                // Update ItemFlow with new covers
+                [flowView setItemCount:(NSUInteger)count];
+                NSMutableIndexSet *indices = [NSMutableIndexSet indexSet];
+                for (NSInteger i = 0; i < count; i++) {
+                    if ([coverImages objectForKey:[playlist objectAtIndex:i]]) {
+                        [indices addIndex:(NSUInteger)i];
+                    }
+                }
+                if ([indices count] > 0) {
+                    [flowView updateTexturesForIndices:indices];
+                }
+            });
+        }
+    });
 }
 
 - (NSString *)formatTime:(CMTime)time
@@ -1835,7 +2146,7 @@
         } else {
             title = [title stringByDeletingPathExtension];
         }
-        [mainWindow setTitle:[NSString stringWithFormat:@"Player — %@", title]];
+        [mainWindow setTitle:[NSString stringWithFormat:@"Player - %@", title]];
     } else {
         [mainWindow setTitle:@"Player"];
     }
@@ -1905,6 +2216,530 @@
 - (void)exitApp
 {
     [NSApp terminate:self];
+}
+
+#pragma mark - Radio Mode: Layout
+
+- (void)layoutRadioMode
+{
+    NSView *content = [mainWindow contentView];
+    NSRect bounds = [content bounds];
+    CGFloat W = bounds.size.width;
+    CGFloat H = bounds.size.height;
+    CGFloat margin = METRICS_CONTENT_SIDE_MARGIN;
+
+    // ---- Search field at top ---- //
+    CGFloat searchY = H - METRICS_CONTENT_TOP_MARGIN - 22;
+    [searchField setFrame:NSMakeRect(margin, searchY, W - 2 * margin, 22)];
+    [searchField setHidden:NO];
+    [searchField setAutoresizingMask:NSViewWidthSizable];
+
+    // ---- ItemFlowView (station browser) fills middle ---- //
+    CGFloat flowTop = searchY - METRICS_SPACE_8;
+    CGFloat flowBottom = METRICS_CONTENT_BOTTOM_MARGIN + 160;  // leave room for controls
+    CGFloat flowH = flowTop - flowBottom;
+    if (flowH < 100) flowH = 100;
+
+    [flowView setFrame:NSMakeRect(0, flowBottom, W, flowH)];
+    [flowView setHidden:NO];
+    [videoView setHidden:YES];
+
+    // Center spinner on flow view
+    NSSize spinSize = [progressIndicator frame].size;
+    [progressIndicator setFrameOrigin:NSMakePoint(
+        NSMidX(bounds) - spinSize.width / 2.0,
+        flowBottom + flowH / 2.0 - spinSize.height / 2.0)];
+    [progressIndicator setAutoresizingMask:NSViewMinXMargin | NSViewMaxXMargin |
+                                           NSViewMinYMargin | NSViewMaxYMargin];
+
+    // Hide local-mode metadata labels
+    [titleLabel setHidden:YES];
+    [artistLabel setHidden:YES];
+    [albumLabel setHidden:YES];
+    [detailsLabel setHidden:YES];
+
+    // Hide time slider and labels
+    [currentTimeLabel setHidden:YES];
+    [timeSlider setHidden:YES];
+    [totalTimeLabel setHidden:YES];
+
+    // ---- Status label (shows station name / state) ---- //
+    CGFloat statusY = flowBottom - METRICS_SPACE_8 - 16;
+    [statusLabel setFrame:NSMakeRect(margin, statusY, W - 2 * margin, 16)];
+    [statusLabel setHidden:NO];
+    [statusLabel setAutoresizingMask:NSViewWidthSizable];
+
+    // ---- Radio text (ICY StreamTitle + icy-url) below status ---- //
+    CGFloat radioTextY = statusY - 4.0 - 32;
+    [radioTextLabel setFrame:NSMakeRect(margin, radioTextY, W - 2 * margin, 32)];
+    [radioTextLabel setHidden:NO];
+    [radioTextLabel setAutoresizingMask:NSViewWidthSizable];
+
+    // ---- Volume controls ---- //
+    CGFloat volY = radioTextY - METRICS_SPACE_12 - 22;
+    CGFloat volLabelW = 55.0;
+    CGFloat sliderMaxW = 180.0;
+    CGFloat muteW = 60.0;
+    CGFloat volSliderW = W - margin - (margin + volLabelW + METRICS_SPACE_8 + muteW + METRICS_SPACE_8);
+    if (volSliderW > sliderMaxW) volSliderW = sliderMaxW;
+
+    [volumeLabel setFrame:NSMakeRect(margin, volY, volLabelW, 22)];
+    [volumeLabel setHidden:NO];
+
+    [volumeSlider setFrame:NSMakeRect(margin + volLabelW + METRICS_SPACE_8, volY, volSliderW, 22)];
+    [volumeSlider setHidden:NO];
+    [volumeSlider setAutoresizingMask:NSViewWidthSizable];
+
+    [muteCheckbox setFrame:NSMakeRect(margin + volLabelW + METRICS_SPACE_8 + volSliderW + METRICS_SPACE_8,
+                                       volY + 2, muteW, 18)];
+    [muteCheckbox setHidden:NO];
+
+    // ---- Playback controls row ---- //
+    CGFloat ctrlY = volY - METRICS_SPACE_12 - 22;
+    CGFloat btnW = 36.0;
+    CGFloat btnH = 22.0;
+    CGFloat gap = 6.0;
+    CGFloat fourBtnW = 4 * btnW + 3 * gap;
+    CGFloat ctrlStartX = floorf((W - fourBtnW) / 2.0);
+
+    [previousButton setFrame:NSMakeRect(ctrlStartX, ctrlY, btnW, btnH)];
+    [playButton setFrame:NSMakeRect(ctrlStartX + btnW + gap, ctrlY, btnW, btnH)];
+    [stopButton setFrame:NSMakeRect(ctrlStartX + 2 * (btnW + gap), ctrlY, btnW, btnH)];
+    [nextButton setFrame:NSMakeRect(ctrlStartX + 3 * (btnW + gap), ctrlY, btnW, btnH)];
+
+    [previousButton setHidden:NO];
+    [playButton setHidden:NO];
+    [stopButton setHidden:NO];
+    [nextButton setHidden:NO];
+
+    // Hide Open and Fullscreen buttons
+    [openButton setHidden:YES];
+    [fullscreenButton setHidden:YES];
+
+    // Hide overlay if present
+    if (overlayBar && ![overlayBar isHidden]) {
+        [overlayBar setHidden:YES];
+    }
+
+    // Enable prev/next for station cycling
+    NSArray *stations = [[RadioManager sharedManager] stations];
+    [previousButton setEnabled:([stations count] > 1)];
+    [nextButton setEnabled:([stations count] > 1)];
+}
+
+#pragma mark - Radio Mode: Mode Switching
+
+- (IBAction)toggleRadioMode:(id)sender
+{
+    NSLog(@"[Player] toggleRadioMode: called (sender=%@, playerMode=%ld)", sender, (long)playerMode);
+    if (playerMode == PlayerModeRadio) {
+        [self exitRadioMode];
+    } else {
+        [self enterRadioMode];
+    }
+}
+
+- (void)enterRadioMode
+{
+    if (playerMode == PlayerModeRadio) return;
+    playerMode = PlayerModeRadio;
+    NSLog(@"[Player] enterRadioMode");
+
+    // Save current volume slider position for local mode
+    localVolume = [volumeSlider floatValue];
+
+    // Immediate visible feedback
+    [mainWindow setTitle:@"Player - Internet Radio"];
+
+    // Set up delegate on RadioManager if not done yet
+    if (!radioInitialized) {
+        [[RadioManager sharedManager] setDelegate:self];
+        radioInitialized = YES;
+    }
+
+    // Stop any local playback
+    [self stopPlayback];
+
+    // Stop radio if playing
+    if ([[RadioManager sharedManager] isPlaying]) {
+        [[RadioManager sharedManager] stop];
+    }
+
+    // Sync slider and RadioManager to persisted radio-mode volume
+    [[RadioManager sharedManager] setVolume:radioVolume];
+    [volumeSlider setDoubleValue:radioVolume];
+
+    // Persist radio mode and update menu title
+    [[NSUserDefaults standardUserDefaults] setInteger:playerMode forKey:@"PlayerMode"];
+    [radioModeMenuItem setTitle:@"Exit Radio Mode"];
+
+    // Reload flow view for radio station data
+    [flowView reloadData];
+
+    // Load stations
+    [statusLabel setStringValue:@"Loading stations..."];
+    [[RadioManager sharedManager] loadLocalStations];
+
+    // Update button states
+    [playButton setEnabled:YES];
+    [stopButton setEnabled:YES];
+    [previousButton setEnabled:NO];
+    [nextButton setEnabled:NO];
+    [playButton setImage:[self iconPlay]];
+
+    [self layoutSubviews];
+    [self updateStatus:@"Internet Radio mode"];
+}
+
+- (void)exitRadioMode
+{
+    if (playerMode != PlayerModeRadio) return;
+    playerMode = PlayerModeLocal;
+
+    // Save current radio volume before switching away
+    radioVolume = [volumeSlider floatValue];
+    [[NSUserDefaults standardUserDefaults] setFloat:radioVolume
+                                             forKey:@"PlayerRadioVolume"];
+
+    // Stop radio
+    if ([[RadioManager sharedManager] isPlaying]) {
+        [[RadioManager sharedManager] stop];
+    }
+
+    // Restore local-mode volume slider
+    [volumeSlider setDoubleValue:localVolume];
+
+    // Persist local mode and update menu title
+    [[NSUserDefaults standardUserDefaults] setInteger:playerMode forKey:@"PlayerMode"];
+    [radioModeMenuItem setTitle:@"Browse Radio Stations"];
+
+    // Hide radio-only UI elements (volume controls are now managed by layoutNormalMode)
+    [searchField setHidden:YES];
+    [statusLabel setHidden:YES];
+
+    // Reload flow view back to playlist data
+    [flowView reloadData];
+
+    [self layoutSubviews];
+    [self updateStatus:@"Local mode"];
+}
+
+#pragma mark - Radio Mode: Actions
+
+- (void)radioPlaySelected
+{
+    NSArray *stations = [[RadioManager sharedManager] stations];
+    if ([stations count] == 0) {
+        [statusLabel setStringValue:@"No stations loaded. Search for stations first."];
+        return;
+    }
+
+    NSUInteger selIndex = [flowView selectedIndex];
+    if (selIndex >= [stations count]) {
+        selIndex = 0;
+    }
+
+    RadioStation *station = [stations objectAtIndex:selIndex];
+    [self schedulePlayStation:station];
+}
+
+- (void)radioPreviousStation
+{
+    NSArray *stations = [[RadioManager sharedManager] stations];
+    if ([stations count] < 2) return;
+
+    NSUInteger selIndex = [flowView selectedIndex];
+    if (selIndex == NSNotFound || selIndex >= [stations count]) {
+        selIndex = 0;
+    }
+    selIndex = (selIndex == 0) ? [stations count] - 1 : selIndex - 1;
+    [flowView setSelectedIndex:selIndex];
+    RadioStation *station = [stations objectAtIndex:selIndex];
+    [self schedulePlayStation:station];
+}
+
+- (void)radioNextStation
+{
+    NSArray *stations = [[RadioManager sharedManager] stations];
+    if ([stations count] < 2) return;
+
+    NSUInteger selIndex = [flowView selectedIndex];
+    if (selIndex == NSNotFound || selIndex >= [stations count]) {
+        selIndex = 0;
+    }
+    selIndex = (selIndex + 1) % [stations count];
+    [flowView setSelectedIndex:selIndex];
+    RadioStation *station = [stations objectAtIndex:selIndex];
+    [self schedulePlayStation:station];
+}
+
+- (void)radioSearchAction:(id)sender
+{
+    NSString *query = [sender stringValue];
+    if ([query length] == 0) {
+        [[RadioManager sharedManager] loadLocalStations];
+    } else {
+        [[RadioManager sharedManager] searchStations:query];
+    }
+}
+
+- (void)openRadioStream:(id)sender
+{
+    // Simple input dialog: use NSAlert with informative text, then prompt separately
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:@"Open Radio Stream"];
+    [alert setInformativeText:@"Enter a stream URL or station name in the field below,\nthen click Play or press Enter."];
+    [alert addButtonWithTitle:@"Play"];
+    [alert addButtonWithTitle:@"Cancel"];
+
+    // Add a text input field to the alert's content view
+    NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 280, 22)];
+    [input setPlaceholderString:@"http://stream.example.com:8000/stream"];
+
+    NSView *cv = [[alert window] contentView];
+    NSRect cvFrame = [cv frame];
+    // Enlarge the content view to fit the input
+    cvFrame.size.height += 36;
+    [cv setFrame:cvFrame];
+    // Shift existing subviews up
+    for (NSView *sv in [cv subviews]) {
+        NSRect sf = [sv frame];
+        sf.origin.y += 36;
+        [sv setFrame:sf];
+    }
+    // Place input at bottom
+    [input setFrameOrigin:NSMakePoint(20, 10)];
+    [cv addSubview:input];
+    [[alert window] setInitialFirstResponder:input];
+
+    NSInteger result = [alert runModal];
+    if (result == NSAlertFirstButtonReturn) {
+        NSString *urlString = [[input stringValue]
+            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([urlString length] > 0) {
+            RadioStation *matchedStation = nil;
+            for (RadioStation *s in [[RadioManager sharedManager] stations]) {
+                if ([[s name] isEqualToString:urlString]) {
+                    matchedStation = s;
+                    break;
+                }
+            }
+            if (matchedStation) {
+                [self schedulePlayStation:matchedStation];
+            } else {
+                [[RadioManager sharedManager] playURL:urlString];
+            }
+        }
+    }
+
+    [input release];
+    [alert release];
+}
+
+- (void)radioStop:(id)sender
+{
+    [[RadioManager sharedManager] stop];
+}
+
+- (void)radioVolumeChanged:(id)sender
+{
+    float vol = [volumeSlider floatValue];
+    if (playerMode == PlayerModeRadio) {
+        radioVolume = vol;
+        [[NSUserDefaults standardUserDefaults] setFloat:radioVolume
+                                                 forKey:@"PlayerRadioVolume"];
+        [[RadioManager sharedManager] setVolume:vol];
+    } else {
+        // Local mode — persist and apply
+        localVolume = vol;
+        [[NSUserDefaults standardUserDefaults] setFloat:localVolume
+                                                 forKey:@"PlayerLocalVolume"];
+        if (audioPlayer) {
+            [audioPlayer setVolume:vol];
+            // Also try through NSSound directly if available
+            NSSound *sound = [audioPlayer valueForKey:@"sound"];
+            if (sound) {
+                [sound setVolume:vol];
+            }
+        }
+    }
+}
+
+- (void)radioMuteToggled:(id)sender
+{
+    BOOL isMuted = ([muteCheckbox state] == NSOnState);
+    if (playerMode == PlayerModeRadio) {
+        [[RadioManager sharedManager] setMuted:isMuted];
+    } else {
+        // Local mode: mute by setting volume to 0, unmute by restoring slider value
+        float targetVol = isMuted ? 0.0f : [volumeSlider floatValue];
+        if (audioPlayer) {
+            [audioPlayer setVolume:targetVol];
+            NSSound *sound = [audioPlayer valueForKey:@"sound"];
+            if (sound) [sound setVolume:targetVol];
+        }
+    }
+}
+
+- (void)updateRadioUI
+{
+    BOOL playing = [[RadioManager sharedManager] isPlaying];
+    if (playing) {
+        [playButton setImage:[self iconPause]];
+    } else {
+        [playButton setImage:[self iconPlay]];
+    }
+}
+
+#pragma mark - RadioManagerDelegate
+
+- (void)radioManagerDidUpdateStations:(RadioManager *)manager
+{
+    [flowView reloadData];
+    NSUInteger count = [[manager stations] count];
+    if (count > 0) {
+        // Load text-placeholder textures for visible stations immediately
+        NSMutableIndexSet *indices = [NSMutableIndexSet indexSet];
+        NSUInteger loadCount = MIN(24, count);
+        for (NSUInteger i = 0; i < loadCount; i++) {
+            [indices addIndex:i];
+        }
+        [flowView updateTexturesForIndices:indices];
+
+        [flowView setSelectedIndex:0];
+        [previousButton setEnabled:(count > 1)];
+        [nextButton setEnabled:(count > 1)];
+    }
+    // Rebuild the dynamic station list in the Radio menu
+    [self rebuildRadioStationMenu];
+}
+
+- (void)radioManagerDidStartPlaying:(RadioManager *)manager station:(RadioStation *)station
+{
+    [playButton setImage:[self iconPause]];
+    [radioTextLabel setStringValue:@""];  // Clear previous radio text
+    if (station) {
+        [statusLabel setStringValue:[NSString stringWithFormat:@"Now Playing: %@", [station name]]];
+        [mainWindow setTitle:[NSString stringWithFormat:@"Player - %@", [station name]]];
+    } else {
+        [statusLabel setStringValue:@"Now Playing"];
+        [mainWindow setTitle:@"Player - Internet Radio"];
+    }
+    [stopButton setEnabled:YES];
+}
+
+- (void)radioManagerDidStop:(RadioManager *)manager
+{
+    [playButton setImage:[self iconPlay]];
+    [stopButton setEnabled:NO];
+    [radioTextLabel setStringValue:@""];
+    NSString *name = [manager currentStationName];
+    if (name) {
+        [statusLabel setStringValue:[NSString stringWithFormat:@"Stopped: %@", name]];
+    } else {
+        [statusLabel setStringValue:@"Stopped"];
+    }
+}
+
+- (void)radioManager:(RadioManager *)manager didFailWithError:(NSString *)errorMessage
+{
+    [statusLabel setStringValue:[NSString stringWithFormat:@"Error: %@", errorMessage]];
+    [playButton setImage:[self iconPlay]];
+}
+
+- (void)radioManagerDidUpdateStatus:(RadioManager *)manager status:(NSString *)status
+{
+    if ([status length] > 0) {
+        [statusLabel setStringValue:status];
+    }
+}
+
+- (void)radioManager:(RadioManager *)manager didUpdateRadioText:(NSString *)radioText
+{
+    if ([radioText length] > 0) {
+        [radioTextLabel setStringValue:radioText];
+    } else {
+        [radioTextLabel setStringValue:@""];
+    }
+}
+
+- (void)radioManager:(RadioManager *)manager didUpdateMetadata:(NSDictionary *)metadata
+{
+    // Build a multiline display: StreamTitle on first line, icy-url on second
+    NSString *streamTitle = [metadata objectForKey:@"StreamTitle"] ?: @"";
+    NSString *icyURL = [metadata objectForKey:@"icy-url"] ?: @"";
+    NSString *display = @"";
+    if ([streamTitle length] > 0) {
+        display = streamTitle;
+    }
+    if ([icyURL length] > 0) {
+        if ([display length] > 0) {
+            display = [display stringByAppendingFormat:@"\nicy-url: %@", icyURL];
+        } else {
+            display = [NSString stringWithFormat:@"icy-url: %@", icyURL];
+        }
+    }
+    [radioTextLabel setStringValue:display];
+}
+
+- (void)radioManager:(RadioManager *)manager didLoadIconAtIndex:(NSUInteger)index
+{
+    // Incrementally update the ItemFlowView texture for this index
+    [flowView updateTexturesForIndices:[NSIndexSet indexSetWithIndex:index]];
+}
+
+#pragma mark - Radio Mode: Dynamic Station Menu
+
+- (void)rebuildRadioStationMenu
+{
+    NSMenu *radioMenu = [[[NSApp mainMenu] itemWithTitle:@"Radio"] submenu];
+    if (!radioMenu) return;
+
+    // Remove all dynamically-added items (keep indices 0-3: Browse, Open, sep, Stop)
+    while ([radioMenu numberOfItems] > 4) {
+        [radioMenu removeItemAtIndex:[radioMenu numberOfItems] - 1];
+    }
+
+    // Add sentinel separator (tagged so validateMenuItem: can identify it)
+    NSMenuItem *stationSep = (NSMenuItem *)[NSMenuItem separatorItem];
+    [stationSep setTag:9999];
+    [radioMenu addItem:stationSep];
+
+    // Add station items
+    NSArray *stations = [[RadioManager sharedManager] stations];
+    for (NSUInteger si = 0; si < [stations count]; si++) {
+        RadioStation *station = [stations objectAtIndex:si];
+        NSString *name = [station name] ?: @"Unknown Station";
+        NSMenuItem *sItem = [[NSMenuItem alloc] initWithTitle:name
+                                                       action:@selector(radioSelectStationFromMenu:)
+                                                keyEquivalent:@""];
+        [sItem setTarget:self];
+        [sItem setTag:(NSInteger)si];
+        [radioMenu addItem:sItem];
+        [sItem release];
+    }
+}
+
+- (void)radioSelectStationFromMenu:(id)sender
+{
+    NSInteger index = [sender tag];
+    NSArray *stations = [[RadioManager sharedManager] stations];
+    if (index < 0 || index >= (NSInteger)[stations count]) return;
+
+    // Enter radio mode if not already
+    if (playerMode != PlayerModeRadio) {
+        [self enterRadioMode];
+    }
+
+    // Select in flow view — didSelectItemAtIndex: will schedule playback via debounce
+    [flowView setSelectedIndex:(NSUInteger)index];
+}
+
+#pragma mark - Radio Mode: URL History
+
+- (void)addRadioURLToHistory:(NSString *)url
+{
+    // RadioManager could persist history in the future
 }
 
 @end

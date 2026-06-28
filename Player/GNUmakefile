@@ -45,10 +45,18 @@ Resources/Info-gnustep.plist: Resources/Info.plist
 # Source files
 #
 Player_HEADER_FILES = \
-	PlayerController.h
+	PlayerController.h \
+	RadioStation.h \
+	RadioBrowser.h \
+	StreamPlayer.h \
+	RadioManager.h
 
 Player_OBJC_FILES = \
-	PlayerController.m
+	PlayerController.m \
+	RadioStation.m \
+	RadioBrowser.m \
+	StreamPlayer.m \
+	RadioManager.m
 
 Player_OBJC_FILES += Player_main.m
 
@@ -72,6 +80,13 @@ ADDITIONAL_LDFLAGS += -L$(ITEMFLOW_LIB)
 ADDITIONAL_GUI_LIBS += -lItemFlow -lGL -lGLU
 # ItemFlow uses libdispatch internally; on FreeBSD the strict linker needs it explicitly.
 ADDITIONAL_GUI_LIBS += -ldispatch
+
+#
+# FFmpeg and libao for internet radio streaming (StreamPlayer)
+#
+ADDITIONAL_INCLUDE_DIRS += $(shell pkg-config --cflags libavformat libavcodec libavutil libswresample)
+ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs libavformat libavcodec libavutil libswresample)
+ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs ao)
 
 -include GNUmakefile.preamble
 

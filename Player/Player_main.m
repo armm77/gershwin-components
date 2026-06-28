@@ -22,16 +22,16 @@ int main(int argc, const char *argv[])
    PlayerController *controller = [[PlayerController alloc] init];
 
    [[NSApplication sharedApplication] setDelegate:controller];
-   [controller createUI];
 
    // If command-line args provided, let the controller handle them
+   // (will be handled again in applicationDidFinishLaunching: but that's fine)
    if (hasCommandLineArgs) {
        [controller handleCommandLineArguments];
    }
 
    [pool release];
 
-   // Run the application
+   // Run the application — createUI is called from applicationDidFinishLaunching:
    [[NSApplication sharedApplication] run];
    return 0;
 }

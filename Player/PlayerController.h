@@ -10,6 +10,7 @@
 #import <AppKit/AppKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import "ItemFlowView.h"
+#import "RadioManager.h"
 
 typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
     PlayerPlaybackStateStopped,
@@ -17,7 +18,12 @@ typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
     PlayerPlaybackStatePaused
 };
 
-@interface PlayerController : NSObject <NSWindowDelegate, ItemFlowViewDataSource, ItemFlowViewDelegate>
+typedef NS_ENUM(NSInteger, PlayerMode) {
+    PlayerModeLocal,
+    PlayerModeRadio
+};
+
+@interface PlayerController : NSObject <NSWindowDelegate, ItemFlowViewDataSource, ItemFlowViewDelegate, RadioManagerDelegate>
 {
     // Main window
     NSWindow *mainWindow;
@@ -75,9 +81,32 @@ typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
     // Menu items (to update checkmarks)
     NSMenuItem *repeatMenuItem;
     NSMenuItem *shuffleMenuItem;
+    NSMenuItem *radioModeMenuItem;
 
     // Cover art cache
     NSMutableDictionary *coverImages;
+
+    // ---- Radio Mode ---- //
+    PlayerMode playerMode;
+    NSTextField *searchField;
+    NSTextField *statusLabel;       // "Connecting...", "Playing: Station Name"
+    NSTextField *radioTextLabel;    // ICY StreamTitle updates from the radio stream
+    NSTextField *volumeLabel;
+    NSSlider *volumeSlider;
+    NSButton *muteCheckbox;
+
+    // Track if we have radio delegate set up
+    BOOL radioInitialized;
+
+    // Persisted volume level for local (non-radio) playback
+    float localVolume;
+    // Persisted volume level for radio playback
+    float radioVolume;
+
+    // Debounce radio station selection — don't play until 200ms idle
+    RadioStation *_pendingRadioStation;
+    NSTimeInterval _lastSelectionTime;
+    BOOL _debounceScheduled;
 }
 
 // Properties
@@ -168,6 +197,16 @@ typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
 - (void)handleCommandLineArguments;
 - (void)printUsageAndExit;
 - (void)exitApp;
+
+// ---- Radio Mode ---- //
+- (IBAction)toggleRadioMode:(id)sender;
+- (void)enterRadioMode;
+- (void)exitRadioMode;
+- (void)radioSearchAction:(id)sender;
+- (void)openRadioStream:(id)sender;
+- (void)radioVolumeChanged:(id)sender;
+- (void)radioMuteToggled:(id)sender;
+- (void)updateRadioUI;
 
 @end
 
