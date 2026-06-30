@@ -1522,10 +1522,6 @@
         [self setMixerChannelForUnit:device.cardIndex
                              channel:SOUND_MIXER_PCM
                                value:cachedOutputVolume > 0 ? cachedOutputVolume : 75];
-        // Play confirmation sound on the newly selected device
-        if (currentAlert) {
-            [self playAlertSound:currentAlert];
-        }
     }
 
     return success;

@@ -250,10 +250,12 @@ static NSString *const kMicControl = @"Mic";
                 device.deviceIndex = [devicePart intValue];
             }
 
-            // Create identifier
+            // Create identifier and stable device ID
             device.identifier = [NSString stringWithFormat:@"hw:%d,%d",
                                 cardNum, device.deviceIndex];
             device.name = device.identifier;
+            device.stableDeviceId = [self stableDeviceIdForCardIndex:cardNum
+                                                         deviceIndex:device.deviceIndex];
 
             // Probe device to verify it's actually attached and usable.
             // aplay -l lists all cards registered by kernel drivers, but
@@ -278,7 +280,12 @@ static NSString *const kMicControl = @"Mic";
         }
     }
 
-    // Set first device as default if none selected
+    // Try to pick up the ALSA default from .asoundrc.
+    // If no saved default exists at loadDefaultDevices time, this is
+    // used instead of just grabbing the first aplay -l entry.
+    [self pickDefaultFromAsoundrc];
+
+    // Fall back to first device if nothing is selected yet
     if ([cachedOutputDevices count] > 0 && defaultOutput == nil) {
         AudioDevice *first = [cachedOutputDevices objectAtIndex:0];
         first.isDefault = YES;
@@ -327,6 +334,8 @@ static NSString *const kMicControl = @"Mic";
             device.identifier = [NSString stringWithFormat:@"hw:%d,%d",
                                 cardNum, device.deviceIndex];
             device.name = device.identifier;
+            device.stableDeviceId = [self stableDeviceIdForCardIndex:cardNum
+                                                         deviceIndex:device.deviceIndex];
 
             // Probe input device to verify it is actually attached
             if (![self isInputDeviceUsable:device]) {
@@ -490,48 +499,6 @@ static NSString *const kMicControl = @"Mic";
     [task release];
 
     return [result autorelease];
-}
-
-#pragma mark - Device In-Use Detection
-
-- (AudioDevice *)currentlyInUseOutputDevice
-{
-    for (AudioDevice *device in cachedOutputDevices) {
-        if ([self isDeviceCurrentlyPlaying:device]) {
-            return device;
-        }
-    }
-
-    // If no device says RUNNING, check for any that are not CLOSED/idle.
-    // A device that is open in hw_params but not yet streaming is still
-    // "in use" for our purposes.
-    for (AudioDevice *device in cachedOutputDevices) {
-        NSString *path = [NSString stringWithFormat:
-            @"/proc/asound/card%d/pcm%dp/sub0/hw_params",
-            device.cardIndex, device.deviceIndex];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
-            return device;
-        }
-    }
-
-    return nil;
-}
-
-- (BOOL)isDeviceCurrentlyPlaying:(AudioDevice *)device
-{
-    // Check /proc/asound/card<N>/pcm<D>p/sub0/status for RUNNING state.
-    // ALSA writes "state: RUNNING" when the PCM substream is actively
-    // playing audio, "state: CLOSED" or similar otherwise.
-    NSString *statusPath = [NSString stringWithFormat:
-        @"/proc/asound/card%d/pcm%dp/sub0/status",
-        device.cardIndex, device.deviceIndex];
-
-    NSString *status = [NSString stringWithContentsOfFile:statusPath
-                                                 encoding:NSUTF8StringEncoding
-                                                    error:NULL];
-    if (!status) return NO;
-
-    return ([status rangeOfString:@"state: RUNNING"].location != NSNotFound);
 }
 
 - (void)updateDeviceWithMixerControls:(AudioDevice *)device 
@@ -1635,21 +1602,62 @@ static NSString *const kMicControl = @"Mic";
             NSNumber *volFeedback = [prefs objectForKey:@"playVolumeFeedback"];
             
             if (outputId) {
-                AudioDevice *dev = [self outputDeviceWithIdentifier:outputId];
+                // Stable device ID match — authoritative, always applies
+                AudioDevice *dev = [self outputDeviceWithStableId:outputId];
                 if (dev) {
-                    [self setDefaultOutputDevice:dev];
+                    dev.isDefault = YES;
+                    [defaultOutput release];
+                    defaultOutput = [dev retain];
+                    currentOutputCard = dev.cardIndex;
+                    NSDebugLLog(@"gwcomp", @"ALSABackend: loaded default output by stable ID '%@'", outputId);
+                } else {
+                    // Legacy "hw:N,M" fallback — only use if asoundrc didn't
+                    // already pick a default (avoid overriding a valid match
+                    // when card indices have shifted since the plist was saved).
+                    if (defaultOutput == nil) {
+                        dev = [self outputDeviceWithIdentifier:outputId];
+                        if (dev) {
+                            dev.isDefault = YES;
+                            [defaultOutput release];
+                            defaultOutput = [dev retain];
+                            currentOutputCard = dev.cardIndex;
+                            NSDebugLLog(@"gwcomp", @"ALSABackend: loaded default output by legacy ID '%@'", outputId);
+                        }
+                    } else {
+                        NSDebugLLog(@"gwcomp", @"ALSABackend: stable ID '%@' not found, keeping asoundrc default", outputId);
+                    }
                 }
             }
-            
+
             if (inputId) {
-                AudioDevice *dev = [self inputDeviceWithIdentifier:inputId];
+                AudioDevice *dev = [self inputDeviceWithStableId:inputId];
                 if (dev) {
-                    [self setDefaultInputDevice:dev];
+                    dev.isDefault = YES;
+                    [defaultInput release];
+                    defaultInput = [dev retain];
+                    currentInputCard = dev.cardIndex;
+                    NSDebugLLog(@"gwcomp", @"ALSABackend: loaded default input by stable ID '%@'", inputId);
+                } else {
+                    if (defaultInput == nil) {
+                        dev = [self inputDeviceWithIdentifier:inputId];
+                        if (dev) {
+                            dev.isDefault = YES;
+                            [defaultInput release];
+                            defaultInput = [dev retain];
+                            currentInputCard = dev.cardIndex;
+                            NSDebugLLog(@"gwcomp", @"ALSABackend: loaded default input by legacy ID '%@'", inputId);
+                        }
+                    } else {
+                        NSDebugLLog(@"gwcomp", @"ALSABackend: stable ID '%@' not found, keeping asoundrc default", inputId);
+                    }
                 }
             }
-            
+
             if (alertId) {
-                alertDevice = [[self outputDeviceWithIdentifier:alertId] retain];
+                alertDevice = [[self outputDeviceWithStableId:alertId] retain];
+                if (!alertDevice) {
+                    alertDevice = [[self outputDeviceWithIdentifier:alertId] retain];
+                }
             }
             
             if (alertSoundName) {
@@ -1672,6 +1680,116 @@ static NSString *const kMicControl = @"Mic";
             
             if (volFeedback) {
                 playVolumeChangeFeedback = [volFeedback boolValue];
+            }
+        }
+    }
+}
+
+- (void)pickDefaultFromAsoundrc
+{
+    // Only run if no saved plist default was loaded.
+    if (defaultOutput != nil) return;
+
+    NSString *asoundrc = [NSString stringWithContentsOfFile:asoundrcPath
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:NULL];
+    if (!asoundrc) return;
+
+    // Within the pcm.!default block, find the slave pcm line which has:
+    //   pcm "hw:CardID,Device"   (card name or numeric index)
+    NSRange pcmBlock = [asoundrc rangeOfString:@"pcm.!default"];
+    if (pcmBlock.location == NSNotFound) return;
+
+    NSString *block = [asoundrc substringFromIndex:pcmBlock.location];
+    NSRange closeBrace = [block rangeOfString:@"}"];
+    if (closeBrace.location != NSNotFound) {
+        block = [block substringToIndex:closeBrace.location];
+    }
+
+    // Scan for pcm "hw:..." inside the block — this is what
+    // buildAsoundrcContent writes and it handles both formats:
+    //   pcm "hw:Audio,0"   (card name, stable)
+    //   pcm "hw:0,0"       (numeric index, legacy)
+    NSScanner *scanner = [NSScanner scannerWithString:block];
+    [scanner scanUpToString:@"pcm \"hw:" intoString:NULL];
+    if ([scanner scanString:@"pcm \"hw:" intoString:NULL]) {
+        NSString *cardRef = nil;
+        [scanner scanUpToString:@"\"" intoString:&cardRef];
+        if (cardRef) {
+            // cardRef is "Audio,0" or "0,0" or "Audio"
+            NSArray *parts = [cardRef componentsSeparatedByString:@","];
+            NSString *cardPart = [parts count] > 0 ? [parts objectAtIndex:0] : nil;
+            int devIndex = ([parts count] >= 2) ? [[parts objectAtIndex:1] intValue] : 0;
+
+            if (cardPart) {
+                // Try as card name (string ID) first — handles "Audio", "vc4hdmi0"
+                AudioDevice *match = nil;
+                for (AudioDevice *dev in cachedOutputDevices) {
+                    NSString *cid = [self cardIDForCardIndex:dev.cardIndex];
+                    if ([cid isEqualToString:cardPart] && dev.deviceIndex == devIndex) {
+                        match = dev;
+                        break;
+                    }
+                }
+                // Fall back to numeric card index — handles "0", "1"
+                if (!match) {
+                    int cardNum = [cardPart intValue];
+                    for (AudioDevice *dev in cachedOutputDevices) {
+                        if (dev.cardIndex == cardNum && dev.deviceIndex == devIndex) {
+                            match = dev;
+                            break;
+                        }
+                    }
+                }
+                if (match) {
+                    match.isDefault = YES;
+                    defaultOutput = [match retain];
+                    currentOutputCard = match.cardIndex;
+                    return;
+                }
+            }
+        }
+    }
+
+    // Legacy fallback: look for "card N" inside the pcm block or ctl block
+    // (handles hand-written asoundrc where the card line is inside the block)
+    for (NSString *line in [block componentsSeparatedByString:@"\n"]) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+                             [NSCharacterSet whitespaceCharacterSet]];
+        if (![trimmed hasPrefix:@"card"] && ![trimmed hasPrefix:@"Card"]) continue;
+
+        NSScanner *s = [NSScanner scannerWithString:trimmed];
+        [s scanString:@"card" intoString:NULL];
+        [s scanString:@"Card" intoString:NULL];
+        [s scanCharactersFromSet:[NSCharacterSet whitespaceCharacterSet]
+                     intoString:NULL];
+
+        // Quoted card name
+        NSString *quoted = nil;
+        if ([s scanString:@"\"" intoString:NULL]
+            && [s scanUpToString:@"\"" intoString:&quoted]) {
+            for (AudioDevice *dev in cachedOutputDevices) {
+                NSString *cid = [self cardIDForCardIndex:dev.cardIndex];
+                if ([cid isEqualToString:quoted]) {
+                    dev.isDefault = YES;
+                    defaultOutput = [dev retain];
+                    currentOutputCard = dev.cardIndex;
+                    return;
+                }
+            }
+            continue;
+        }
+
+        // Numeric card index
+        int cardNum = 0;
+        if ([s scanInt:&cardNum]) {
+            for (AudioDevice *dev in cachedOutputDevices) {
+                if (dev.cardIndex == cardNum) {
+                    dev.isDefault = YES;
+                    defaultOutput = [dev retain];
+                    currentOutputCard = dev.cardIndex;
+                    return;
+                }
             }
         }
     }
@@ -1735,11 +1853,6 @@ static NSString *const kMicControl = @"Mic";
     
     // Step 4: Update default device settings
     [self setDefaultOutputDevice:device];
-
-    // Step 5: Play confirmation sound on the newly selected device
-    if (currentAlert) {
-        [self playAlertSound:currentAlert];
-    }
 
     NSDebugLLog(@"gwcomp", @"ALSABackend: forceImmediateOutputDeviceSwitch: SUCCESS");
     return YES;
@@ -1819,15 +1932,18 @@ static NSString *const kMicControl = @"Mic";
 - (BOOL)savePreferences
 {
     NSMutableDictionary *prefs = [NSMutableDictionary dictionary];
-    
+
     if (defaultOutput) {
-        [prefs setObject:defaultOutput.identifier forKey:@"defaultOutput"];
+        [prefs setObject:(defaultOutput.stableDeviceId ?: defaultOutput.identifier)
+                  forKey:@"defaultOutput"];
     }
     if (defaultInput) {
-        [prefs setObject:defaultInput.identifier forKey:@"defaultInput"];
+        [prefs setObject:(defaultInput.stableDeviceId ?: defaultInput.identifier)
+                  forKey:@"defaultInput"];
     }
     if (alertDevice) {
-        [prefs setObject:alertDevice.identifier forKey:@"alertDevice"];
+        [prefs setObject:(alertDevice.stableDeviceId ?: alertDevice.identifier)
+                  forKey:@"alertDevice"];
     }
     if (currentAlert) {
         [prefs setObject:currentAlert.name forKey:@"alertSound"];
@@ -1861,33 +1977,170 @@ static NSString *const kMicControl = @"Mic";
         // exact format match and opens the device exclusively, which
         // causes ao_open_live() — used by AudioOutputSink in NSSound —
         // to return NULL silently when the format doesn't match exactly.
+        //
+        // Use the stable card ID (a string name) instead of a numeric
+        // card index so the configuration survives hardware reordering.
+        NSString *cardId = [self cardIDForCardIndex:defaultOutput.cardIndex];
+        if (!cardId) cardId = [NSString stringWithFormat:@"%d", defaultOutput.cardIndex];
+
         [content appendFormat:@"pcm.!default {\n"];
         [content appendFormat:@"    type plug\n"];
         [content appendFormat:@"    slave {\n"];
-        [content appendFormat:@"        pcm \"hw:%d,%d\"\n", defaultOutput.cardIndex, defaultOutput.deviceIndex];
+        [content appendFormat:@"        pcm \"hw:%@,%d\"\n", cardId, defaultOutput.deviceIndex];
         [content appendFormat:@"    }\n"];
         [content appendFormat:@"}\n\n"];
 
         // Control interface (mixer) can keep type hw — no format conversion needed.
         [content appendFormat:@"ctl.!default {\n"];
         [content appendFormat:@"    type hw\n"];
-        [content appendFormat:@"    card %d\n", defaultOutput.cardIndex];
+        [content appendFormat:@"    card %@\n", cardId];
         [content appendFormat:@"}\n"];
     }
 
     return content;
 }
 
+// Resolve a numeric card index to its stable ALSA card ID (string name)
+// by reading /proc/asound/cards.  Returns nil on failure, in which case
+// the caller should fall back to the numeric index.
+- (NSString *)cardIDForCardIndex:(int)cardIndex
+{
+    NSString *cards = [NSString stringWithContentsOfFile:@"/proc/asound/cards"
+                                                encoding:NSUTF8StringEncoding
+                                                   error:NULL];
+    if (!cards) return nil;
+
+    // Format: " 0 [Audio          ]: USB-Audio - Bose USB Audio"
+    NSString *pattern = [NSString stringWithFormat:@" %d [", cardIndex];
+    NSRange r = [cards rangeOfString:pattern];
+    if (r.location == NSNotFound) return nil;
+
+    NSUInteger start = r.location + r.length;
+    NSRange close = [cards rangeOfString:@"]"
+                                 options:0
+                                   range:NSMakeRange(start, [cards length] - start)];
+    if (close.location == NSNotFound) return nil;
+
+    NSString *cardId = [cards substringWithRange:NSMakeRange(start, close.location - start)];
+    cardId = [cardId stringByTrimmingCharactersInSet:
+                       [NSCharacterSet whitespaceCharacterSet]];
+    return [cardId length] > 0 ? cardId : nil;
+}
+
+// Build a stable, cross-reboot device identifier from the ALSA card ID
+// (a short device name like "Audio", "vc4hdmi0") and the subdevice index.
+// Format: "<cardID>.<deviceIndex>"  e.g., "Audio.0", "vc4hdmi1.0"
+//
+// Unlike the numeric "hw:N,M" identifier, the card ID is a string name
+// that the kernel assigns per physical device, so it survives hardware
+// reordering.  For USB devices the kernel appends _1, _2 for duplicates.
+- (NSString *)stableDeviceIdForCardIndex:(int)cardIndex
+                             deviceIndex:(int)deviceIndex
+{
+    NSString *cardId = [self cardIDForCardIndex:cardIndex];
+    if (!cardId) {
+        // Fallback to numeric index if we can't read the card ID
+        return [NSString stringWithFormat:@"hw:%d,%d", cardIndex, deviceIndex];
+    }
+    return [NSString stringWithFormat:@"%@.%d", cardId, deviceIndex];
+}
+
+// Reverse lookup: find an output device by its stable device ID.
+- (AudioDevice *)outputDeviceWithStableId:(NSString *)stableId
+{
+    NSDebugLLog(@"gwcomp", @"ALSABackend: outputDeviceWithStableId: looking for '%@'", stableId);
+    for (AudioDevice *dev in cachedOutputDevices) {
+        NSDebugLLog(@"gwcomp", @"   cached device: stableDeviceId='%@' identifier='%@' name='%@'",
+              dev.stableDeviceId, dev.identifier, dev.displayName);
+        if ([dev.stableDeviceId isEqualToString:stableId]) {
+            return dev;
+        }
+    }
+    NSDebugLLog(@"gwcomp", @"   NOT FOUND");
+    return nil;
+}
+
+// Reverse lookup: find an input device by its stable device ID.
+- (AudioDevice *)inputDeviceWithStableId:(NSString *)stableId
+{
+    NSDebugLLog(@"gwcomp", @"ALSABackend: inputDeviceWithStableId: looking for '%@'", stableId);
+    for (AudioDevice *dev in cachedInputDevices) {
+        NSDebugLLog(@"gwcomp", @"   cached device: stableDeviceId='%@' identifier='%@' name='%@'",
+              dev.stableDeviceId, dev.identifier, dev.displayName);
+        if ([dev.stableDeviceId isEqualToString:stableId]) {
+            return dev;
+        }
+    }
+    NSDebugLLog(@"gwcomp", @"   NOT FOUND");
+    return nil;
+}
+
 #pragma mark - Refresh
 
 - (void)refresh
 {
+    // Remember stable IDs so we can re-resolve after re-enumeration
+    NSString *savedOutputId = [defaultOutput.stableDeviceId copy];
+    NSString *savedInputId = [defaultInput.stableDeviceId copy];
+    NSString *savedAlertId = [alertDevice.stableDeviceId copy];
+    int oldOutputCard = currentOutputCard;
+    int oldInputCard = currentInputCard;
+
     [self enumerateDevices];
-    
+
+    // Re-resolve defaults against the new device list so that
+    // defaultOutput/defaultInput still point to live objects in
+    // cachedOutputDevices (the old ones were released by removeAllObjects).
+    if (savedOutputId) {
+        AudioDevice *dev = [self outputDeviceWithStableId:savedOutputId];
+        if (dev) {
+            [defaultOutput release];
+            defaultOutput = [dev retain];
+            currentOutputCard = dev.cardIndex;
+        } else {
+            // Fallback: try old card index (device might have been removed)
+            for (AudioDevice *d in cachedOutputDevices) {
+                if (d.cardIndex == oldOutputCard) {
+                    [defaultOutput release];
+                    defaultOutput = [d retain];
+                    currentOutputCard = d.cardIndex;
+                    break;
+                }
+            }
+        }
+    }
+    if (savedInputId) {
+        AudioDevice *dev = [self inputDeviceWithStableId:savedInputId];
+        if (dev) {
+            [defaultInput release];
+            defaultInput = [dev retain];
+            currentInputCard = dev.cardIndex;
+        } else {
+            for (AudioDevice *d in cachedInputDevices) {
+                if (d.cardIndex == oldInputCard) {
+                    [defaultInput release];
+                    defaultInput = [d retain];
+                    currentInputCard = d.cardIndex;
+                    break;
+                }
+            }
+        }
+    }
+    if (savedAlertId) {
+        AudioDevice *dev = [self outputDeviceWithStableId:savedAlertId];
+        if (dev) {
+            [alertDevice release];
+            alertDevice = [dev retain];
+        }
+    }
+    [savedOutputId release];
+    [savedInputId release];
+    [savedAlertId release];
+
     if ([delegate respondsToSelector:@selector(soundBackend:didUpdateOutputDevices:)]) {
         [delegate soundBackend:self didUpdateOutputDevices:cachedOutputDevices];
     }
-    
+
     if ([delegate respondsToSelector:@selector(soundBackend:didUpdateInputDevices:)]) {
         [delegate soundBackend:self didUpdateInputDevices:cachedInputDevices];
     }

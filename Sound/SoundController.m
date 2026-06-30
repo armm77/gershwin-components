@@ -779,16 +779,9 @@ static const CGFloat kTableRowHeight = 18.0;
     [outputMuteCheckbox setEnabled:hasDevices];
     [outputBalanceSlider setEnabled:hasDevices];
     
-    // Find and select the current/active device.
-    // Prefer the device that is currently playing audio (in-use),
-    // so the user sees the active playback device highlighted.
-    AudioDevice *currentDevice = nil;
-    if ([backend respondsToSelector:@selector(currentlyInUseOutputDevice)]) {
-        currentDevice = [backend currentlyInUseOutputDevice];
-    }
-    if (!currentDevice) {
-        currentDevice = [backend defaultOutputDevice];
-    }
+    // Select the default (saved) output device.
+    // The user can change this manually — we never override their choice.
+    AudioDevice *currentDevice = [backend defaultOutputDevice];
     [selectedOutputDevice release];
     selectedOutputDevice = [currentDevice retain];
     
@@ -983,6 +976,11 @@ static const CGFloat kTableRowHeight = 18.0;
 
     // During initialization, just read current state without switching devices
     if (!isInitializing) {
+        // Save preference synchronously first.  If the user quits before the
+        // background audio-switching block runs, the selection still persists.
+        [backend setDefaultOutputDevice:device];
+
+        // Switch audio on background queue (amixer commands are slow)
         AudioDevice *retained = [device retain];
         dispatch_async(backendQueue, ^{
             @autoreleasepool {
@@ -1015,6 +1013,10 @@ static const CGFloat kTableRowHeight = 18.0;
 
     // During initialization, just read current state without switching devices
     if (!isInitializing) {
+        // Save preference synchronously first.
+        [backend setDefaultInputDevice:device];
+
+        // Switch audio on background queue (amixer commands are slow)
         AudioDevice *retained = [device retain];
         dispatch_async(backendQueue, ^{
             @autoreleasepool {
@@ -1099,6 +1101,9 @@ static const CGFloat kTableRowHeight = 18.0;
 
 - (void)tableViewSelectionDidChange:(NSNotification *)notification
 {
+    // Ignore programmatic selection changes from refreshDevices
+    if (isUpdatingUI) return;
+
     NSTableView *tableView = [notification object];
     NSDebugLLog(@"gwcomp", @"SoundController: tableViewSelectionDidChange:");
     
@@ -1196,7 +1201,13 @@ static const CGFloat kTableRowHeight = 18.0;
         BOOL success = [backend setAlertVolume:vol];
         NSDebugLLog(@"gwcomp", @"SoundController: setAlertVolume: %.2f %@", vol,
               success ? @"SUCCESS" : @"FAILED");
-        if (!success) {
+        if (success) {
+            // Play current alert sound to preview volume level
+            AlertSound *current = [backend currentAlertSound];
+            if (current) {
+                [backend playAlertSound:current];
+            }
+        } else {
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSRunAlertPanel(@"Volume Error",
                               @"Could not change the alert volume. Please try again.",
@@ -1272,7 +1283,16 @@ static const CGFloat kTableRowHeight = 18.0;
 - (IBAction)outputDeviceSelected:(id)sender
 {
     NSDebugLLog(@"gwcomp", @"SoundController: UI ACTION - outputDeviceSelected:");
-    // Selection is handled in tableViewSelectionDidChange
+
+    // Play a confirmation alert whenever the user clicks a device,
+    // even if it is already the selected one.
+    AlertSound *alert = [backend currentAlertSound];
+    if (alert) {
+        dispatch_async(backendQueue, ^{
+            [backend playAlertSound:alert];
+        });
+    }
+    // Switching to a different device is handled in tableViewSelectionDidChange
 }
 
 - (IBAction)outputVolumeChanged:(id)sender

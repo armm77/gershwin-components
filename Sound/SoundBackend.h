@@ -138,6 +138,7 @@ typedef NS_ENUM(NSInteger, AudioDeviceState) {
     int deviceIndex;
     NSString *cardName;
     NSString *mixerName;
+    NSString *stableDeviceId;  // Persistent cross-reboot identifier (e.g., "Audio.0")
 }
 
 @property (copy) NSString *identifier;
@@ -160,6 +161,7 @@ typedef NS_ENUM(NSInteger, AudioDeviceState) {
 @property int deviceIndex;
 @property (copy) NSString *cardName;
 @property (copy) NSString *mixerName;
+@property (copy) NSString *stableDeviceId;
 
 - (NSString *)stateString;
 - (NSString *)typeString;
@@ -271,9 +273,6 @@ typedef NS_ENUM(NSInteger, AudioDeviceState) {
                                  toValue:(NSString *)value 
                                    onCard:(int)cardIndex;
 - (NSArray *)getAvailableALSAControls:(int)cardIndex;
-
-// Device in-use detection (which device is currently playing audio)
-- (AudioDevice *)currentlyInUseOutputDevice;
 
 // Bluetooth audio (for future expansion)
 - (NSArray *)bluetoothAudioDevices;

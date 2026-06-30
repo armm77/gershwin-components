@@ -79,6 +79,8 @@
 
 // Default device management
 - (void)loadDefaultDevices;
+- (void)pickDefaultFromAsoundrc;
+- (NSString *)cardIDForCardIndex:(int)cardIndex;
 - (BOOL)saveDefaultDevice:(AudioDevice *)device isOutput:(BOOL)isOutput;
 - (NSString *)buildAsoundrcContent;
 
@@ -104,9 +106,5 @@
 // Device probing
 - (BOOL)isOutputDeviceUsable:(AudioDevice *)device;
 - (BOOL)isInputDeviceUsable:(AudioDevice *)device;
-
-// Device in-use detection
-- (AudioDevice *)currentlyInUseOutputDevice;
-- (BOOL)isDeviceCurrentlyPlaying:(AudioDevice *)device;
 
 @end

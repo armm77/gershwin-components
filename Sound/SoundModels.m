@@ -194,6 +194,7 @@
 @synthesize deviceIndex;
 @synthesize cardName;
 @synthesize mixerName;
+@synthesize stableDeviceId;
 
 - (id)init
 {
@@ -219,6 +220,7 @@
         deviceIndex = 0;
         cardName = nil;
         mixerName = nil;
+        stableDeviceId = nil;
     }
     return self;
 }
@@ -235,6 +237,7 @@
     [activePort release];
     [cardName release];
     [mixerName release];
+    [stableDeviceId release];
     [super dealloc];
 }
 
@@ -260,6 +263,7 @@
     copy.deviceIndex = self.deviceIndex;
     copy.cardName = self.cardName;
     copy.mixerName = self.mixerName;
+    copy.stableDeviceId = self.stableDeviceId;
     
     for (AudioPort *port in self.ports) {
         [copy.ports addObject:[[port copy] autorelease]];
