@@ -12,8 +12,7 @@ Screenshot_APPLICATION_ICON = Screenshot.png
 #
 Screenshot_RESOURCE_FILES = \
 	Resources/Screenshot.png \
-	Resources/Info.plist \
-	Resources/Info-gnustep.plist
+	Resources/Info.plist
 
 Screenshot_LOCALIZED_RESOURCE_FILES = \
 	Localizable.strings
@@ -63,5 +62,7 @@ copy-info: $(APP_NAME).app
 	$(ECHO_NOTHING)if command -v plmerge >/dev/null 2>&1; then \
 	  plmerge $(APP_NAME).app/Resources/Info-gnustep.plist Info.plist "$(GNUSTEP_PLIST_DEPEND)"; \
 	fi$(END_ECHO)
+	# Ensure .desktop file exists (pl2link not available on this system)
+	$(ECHO_NOTHING)touch $(APP_NAME).app/Resources/$(APP_NAME).desktop$(END_ECHO)
 
 -include GNUmakefile.postamble

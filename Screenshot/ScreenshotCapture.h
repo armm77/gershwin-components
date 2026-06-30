@@ -47,6 +47,9 @@ CaptureRect x11_select_window(void);
 CaptureRect x11_select_area(void);
 CaptureRect x11_get_active_window(void);
 
+// Set X11 _NET_WM_WINDOW_TYPE_NORMAL to prevent window disappearing on focus loss
+void x11_set_window_type_normal(void *window_ref);
+
 #ifdef __cplusplus
 }
 #endif

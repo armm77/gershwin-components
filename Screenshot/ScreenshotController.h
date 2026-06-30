@@ -19,7 +19,7 @@ typedef enum {
 
 @interface ScreenshotController : NSObject
 {
-    NSPanel *mainWindow;
+    NSWindow *mainWindow;
     NSTextField *statusLabel;
     NSButton *windowButton;
     NSButton *areaButton;

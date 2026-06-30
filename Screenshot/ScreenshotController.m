@@ -106,15 +106,18 @@
     
     CGFloat windowHeight = totalHeight;
     
-    NSRect windowFrame = NSMakeRect(100, 100, windowWidth, windowHeight);
-    mainWindow = [[NSPanel alloc] initWithContentRect:windowFrame
-                                             styleMask:NSTitledWindowMask | NSClosableWindowMask | NSUtilityWindowMask
+    NSRect windowFrame = NSMakeRect(0, 0, windowWidth, windowHeight);
+    mainWindow = [[NSWindow alloc] initWithContentRect:windowFrame
+                                             styleMask:NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask
                                                backing:NSBackingStoreBuffered
                                                  defer:NO];
     [mainWindow setTitle:@"Screenshot"];
     [mainWindow setDelegate:self];
-    [(NSPanel *)mainWindow setFloatingPanel:NO];
-    [(NSPanel *)mainWindow setBecomesKeyOnlyIfNeeded:NO];
+    [mainWindow setHidesOnDeactivate:NO];
+    [mainWindow setLevel:NSNormalWindowLevel];
+
+    // Tell X11 WM this is a normal app window, not a dialog/utility
+    x11_set_window_type_normal([mainWindow windowRef]);
     
     NSView *contentView = [mainWindow contentView];
     
@@ -398,7 +401,7 @@
             [alert setAlertStyle:NSWarningAlertStyle];
             [alert runModal];
             [alert release];
-            [[NSApplication sharedApplication] terminate:self];
+            [mainWindow makeKeyAndOrderFront:self];
             return;
         }
     } else if (currentMode == ScreenshotModeArea) {
@@ -421,7 +424,7 @@
             [alert setAlertStyle:NSWarningAlertStyle];
             [alert runModal];
             [alert release];
-            [[NSApplication sharedApplication] terminate:self];
+            [mainWindow makeKeyAndOrderFront:self];
             return;
         }
     }
@@ -473,7 +476,16 @@
         
         // Show alert with save/copy options
         [self showPostCaptureDialog];
+
+        // Restore window after user dismissed post-capture dialog
+        if (mainWindow) {
+            [mainWindow makeKeyAndOrderFront:self];
+        }
     } else {
+        // Restore window after failure
+        if (mainWindow) {
+            [mainWindow makeKeyAndOrderFront:self];
+        }
         [self updateStatus:@"Failed to capture screenshot"];
         NSAlert *alert = [[NSAlert alloc] init];
         [alert setMessageText:@"Screenshot Failed"];
@@ -481,7 +493,6 @@
         [alert setAlertStyle:NSWarningAlertStyle];
         [alert runModal];
         [alert release];
-        [self performSelector:@selector(exitApp) withObject:nil afterDelay:0.1];
     }
 }
 
@@ -515,12 +526,14 @@
             [errorAlert setAlertStyle:NSWarningAlertStyle];
             [errorAlert runModal];
             [errorAlert release];
-            // Schedule termination outside of alert context
-            [self performSelector:@selector(exitApp) withObject:nil afterDelay:0.1];
+            // Stay open after copy failure
+            if (mainWindow) {
+                [mainWindow makeKeyAndOrderFront:self];
+            }
         }
     } else {
-        // Cancel - schedule termination outside of alert context
-        [self performSelector:@selector(exitApp) withObject:nil afterDelay:0.1];
+        // Cancel - stay open for next capture
+        [self updateStatus:@"Ready to take screenshot"];
     }
 }
 
@@ -532,7 +545,6 @@
         [alert setAlertStyle:NSWarningAlertStyle];
         [alert runModal];
         [alert release];
-        [self performSelector:@selector(exitApp) withObject:nil afterDelay:0.1];
         return;
     }
     
@@ -766,11 +778,7 @@
         if ([self saveImageToFile:filepath]) {
             [lastSavedPath release];
             lastSavedPath = [filepath retain];
-            [self updateStatus:[NSString stringWithFormat:@"Saved to: %@", filepath]];
-            [self updateStatus:[NSString stringWithFormat:@"Screenshot saved to %@", [filepath lastPathComponent]]];
-            
-            // Quit after successful save
-            [self performSelector:@selector(exitApp) withObject:nil afterDelay:0.1];
+            [self updateStatus:[NSString stringWithFormat:@"Saved to: %@", [filepath lastPathComponent]]];
         } else {
             NSAlert *alert = [[NSAlert alloc] init];
             [alert setMessageText:@"Save Failed"];
@@ -778,13 +786,10 @@
             [alert setAlertStyle:NSWarningAlertStyle];
             [alert runModal];
             [alert release];
-            
-            // Quit even after save failure
-            [self performSelector:@selector(exitApp) withObject:nil afterDelay:0.1];
         }
     } else {
-        // User cancelled save dialog - quit
-        [self performSelector:@selector(exitApp) withObject:nil afterDelay:0.1];
+        // Cancel save - stay open
+        [self updateStatus:@"Save cancelled"];
     }
 }
 

@@ -8,6 +8,7 @@
  #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <time.h>
 #include <X11/Xlib.h>
@@ -355,52 +356,45 @@ int select_area_interactive(Display *display, Window root_window, CaptureRect *r
         fprintf(stderr, "Warning: Failed to grab keyboard\n");
     }
     
-    // Create an override-redirect window for drawing the selection rectangle
-    // This lets X11 handle the rectangle rendering properly
-    XSetWindowAttributes attrs;
-    attrs.override_redirect = True;
-    
-    // Create a semi-transparent blue color (RGB: 100, 149, 237 = cornflower blue)
-    // Allocate the color
+    // Cornflower blue color (RGB: 100, 149, 237) — matches original working code
     XColor blue_color;
-    Colormap colormap = DefaultColormap(display, DefaultScreen(display));
+    Colormap cmap = DefaultColormap(display, DefaultScreen(display));
     blue_color.red = 0x6400;    // 100/255 * 65535
     blue_color.green = 0x9500;  // 149/255 * 65535
     blue_color.blue = 0xED00;   // 237/255 * 65535
     blue_color.flags = DoRed | DoGreen | DoBlue;
-    XAllocColor(display, colormap, &blue_color);
-    
-    attrs.background_pixel = blue_color.pixel;
-    attrs.border_pixel = WhitePixel(display, DefaultScreen(display));
-    
-    Window selection_window = XCreateWindow(display, root_window,
-                                           0, 0, 1, 1, 2,
-                                           CopyFromParent, InputOutput, CopyFromParent,
-                                           CWOverrideRedirect | CWBackPixel | CWBorderPixel,
-                                           &attrs);
-    
-    if (!selection_window) {
+    XAllocColor(display, cmap, &blue_color);
+
+    // Single override-redirect translucent blue overlay (original working approach)
+    XSetWindowAttributes sel_attrs;
+    sel_attrs.override_redirect = True;
+    sel_attrs.background_pixel = blue_color.pixel;
+    sel_attrs.border_pixel = WhitePixel(display, DefaultScreen(display));
+
+    Window sel_win = XCreateWindow(display, root_window,
+                                   0, 0, 1, 1, 1,
+                                   CopyFromParent, InputOutput, CopyFromParent,
+                                   CWOverrideRedirect | CWBackPixel | CWBorderPixel,
+                                   &sel_attrs);
+    if (!sel_win) {
         fprintf(stderr, "Failed to create selection window\n");
-        if (kbd_status == GrabSuccess) {
-            XUngrabKeyboard(display, CurrentTime);
-        }
+        if (kbd_status == GrabSuccess) XUngrabKeyboard(display, CurrentTime);
         XUngrabPointer(display, CurrentTime);
         XFreeCursor(display, cursor);
         return 0;
     }
-    
-    // Set window opacity to 30% using _NET_WM_WINDOW_OPACITY property
-    Atom opacity_atom = XInternAtom(display, "_NET_WM_WINDOW_OPACITY", False);
-    if (opacity_atom != None) {
-        unsigned long opacity = (unsigned long)(0.3 * 0xFFFFFFFF);  // 30% opacity
-        XChangeProperty(display, selection_window, opacity_atom, XA_CARDINAL, 32,
-                       PropModeReplace, (unsigned char *)&opacity, 1);
-    }
-    
+    // 30% opacity via EWMH hint (requires compositor)
+    Atom opacity_atom = XInternAtom(display, "_NET_WM_WINDOW_OPACITY", True);
+    unsigned long opacity = (unsigned long)(0.3 * 0xFFFFFFFF);
+    XChangeProperty(display, sel_win, opacity_atom, XA_CARDINAL, 32,
+                   PropModeReplace, (unsigned char *)&opacity, 1);
+    // Map when first positioned in motion handler
+
     XEvent event;
     int start_x = 0, start_y = 0, end_x = 0, end_y = 0;
     int pressed = 0;
     int cancelled = 0;
+    int has_rect = 0;
     
     while (1) {
         if (XPending(display) == 0) {
@@ -446,11 +440,14 @@ int select_area_interactive(Display *display, Window root_window, CaptureRect *r
             int ry = (start_y < current_y) ? start_y : current_y;
             int rw = abs(current_x - start_x);
             int rh = abs(current_y - start_y);
-            
-            // Resize and reposition the selection window - X11 handles all drawing
+
+            // Move, resize and show the translucent blue overlay window
             if (rw > 0 && rh > 0) {
-                XMoveResizeWindow(display, selection_window, rx, ry, rw, rh);
-                XMapRaised(display, selection_window);
+                XMoveResizeWindow(display, sel_win, rx, ry, rw, rh);
+                XMapWindow(display, sel_win);
+                XRaiseWindow(display, sel_win);
+                XFlush(display);
+                has_rect = 1;
             }
         } else if (event.type == ButtonRelease && pressed) {
             if (event.xbutton.button == Button1) {
@@ -461,13 +458,14 @@ int select_area_interactive(Display *display, Window root_window, CaptureRect *r
             }
         }
     }
-    
-    // Hide and destroy the selection window
-    XUnmapWindow(display, selection_window);
-    XDestroyWindow(display, selection_window);
+
+    // Destroy selection window and wait for server to restore saved pixels
+    XDestroyWindow(display, sel_win);
     XSync(display, False);
-    // Brief delay to ensure window is fully destroyed before capture
-    usleep(100000); // 100ms
+    if (has_rect) {
+        usleep(200000); // 200ms for server to restore save_under pixels
+        XSync(display, False);
+    }
     
     if (kbd_status == GrabSuccess) {
         XUngrabKeyboard(display, CurrentTime);
@@ -735,4 +733,20 @@ char* x11_capture(CaptureMode mode, const char* filename, int delay, CaptureRect
     // This function is kept for compatibility but not fully implemented
     // The actual image saving is done in Objective-C using GNUstep's NSImage
     return NULL;
+}
+
+// Set _NET_WM_WINDOW_TYPE to _NET_WM_WINDOW_TYPE_NORMAL on a given X11 window
+// Prevents X11 window managers from hiding the window on focus loss
+void x11_set_window_type_normal(void *window_ref) {
+    if (!disp) return;
+    Window xid = (Window)(uintptr_t)window_ref;
+    if (xid == None) return;
+
+    Atom wm_type = XInternAtom(disp, "_NET_WM_WINDOW_TYPE", False);
+    Atom normal = XInternAtom(disp, "_NET_WM_WINDOW_TYPE_NORMAL", False);
+    if (wm_type != None && normal != None) {
+        XChangeProperty(disp, xid, wm_type, XA_ATOM, 32,
+                       PropModeReplace, (unsigned char *)&normal, 1);
+        XSync(disp, False);
+    }
 }
