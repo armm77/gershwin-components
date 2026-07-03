@@ -38,8 +38,8 @@
 #define SYSTEM_MENU_CACHE_TTL   30.0
 
 /* Startup desktop menu retry budget */
-#define STARTUP_RETRY_INTERVAL  0.2
-#define STARTUP_RETRY_MAX       50       /* 50 × 0.2 = 10 seconds budget */
+#define STARTUP_RETRY_INTERVAL  0.5
+#define STARTUP_RETRY_MAX       15       /* 15 × 0.5 = 7.5 seconds budget */
 
 /* ── X11 error handling ──────────────────────────────────────────── */
 
@@ -962,7 +962,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
     /* Throttle updates to avoid repeated app tree scanning. */
     NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-    if (now - self.lastSystemMenuUpdateTime < 0.1) {
+    if (now - self.lastSystemMenuUpdateTime < 0.5) {
         /* Throttled — skip. */
         NSDebugLLog(@"gwcomp", @"AppMenuWidget: menuNeedsUpdate throttled");
         return;

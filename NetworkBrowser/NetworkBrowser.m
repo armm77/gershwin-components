@@ -88,6 +88,11 @@
   [window setMinSize: NSMakeSize(800, 400)];
   [window setDelegate: self];
 
+  /* Insert self into responder chain so toolbar/menu actions find us */
+  NSResponder *nextResp = [window nextResponder];
+  [window setNextResponder: self];
+  [self setNextResponder: nextResp];
+
   /* Create main content view */
   NSView *contentView = [window contentView];
   NSRect contentRect = [contentView bounds];
@@ -118,7 +123,7 @@
   /* Middle pane: Services */
   NSRect midRect = NSMakeRect(250, 0, 300, contentRect.size.height);
   NSScrollView *servicesScroll = [[NSScrollView alloc] initWithFrame: midRect];
-  [servicesScroll setAutoresizingMask: NSViewWidthSizable | NSViewHeightSizable];
+  [servicesScroll setAutoresizingMask: NSViewHeightSizable | NSViewMaxXMargin];
   [servicesScroll setHasVerticalScroller: YES];
   [servicesScroll setHasHorizontalScroller: NO];
 
@@ -127,10 +132,12 @@
   [servicesTable setDelegate: self];
   [servicesTable setAllowsEmptySelection: YES];
   [servicesTable setAllowsMultipleSelection: NO];
+  [servicesTable setDoubleAction: @selector(openSelectedServiceInBrowser:)];
 
   NSTableColumn *servicesCol = [[NSTableColumn alloc] initWithIdentifier: @"service"];
   [[servicesCol headerCell] setStringValue: @"Services"];
   [servicesCol setWidth: 300 - 20];
+  [[servicesCol dataCell] setSelectable: NO];
   [servicesTable addTableColumn: servicesCol];
   RELEASE(servicesCol);
 
@@ -195,6 +202,11 @@
 }
 
 /* NSTableViewDelegate methods */
+
+- (BOOL)tableView:(NSTableView *)tableView shouldEditTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row
+{
+  return NO;
+}
 
 - (void)tableViewSelectionDidChange:(NSNotification *)aNotification
 {
@@ -450,6 +462,8 @@
   NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
   [fileMenuItem setSubmenu:fileMenu];
   
+  [fileMenu addItemWithTitle:@"Open" action:@selector(openSelectedServiceInBrowser:) keyEquivalent:@"o"];
+  [fileMenu addItem:[NSMenuItem separatorItem]];
   [fileMenu addItemWithTitle:@"Close Window" action:@selector(performClose:) keyEquivalent:@"w"];
   
   RELEASE(fileMenu);
@@ -486,17 +500,128 @@
   RELEASE(mainMenu);
 }
 
-- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)theApp
+/* Actions */
+
+- (NSURL *)selectedServiceURL
+{
+  NSInteger row = [servicesTable selectedRow];
+  if (row < 0 || row >= (NSInteger)[services count])
+    return nil;
+
+  NSNetService *service = [services objectAtIndex: row];
+  NSString *host = [service hostName];
+  if (!host || [host length] == 0)
+    return nil;
+
+  int port = [service port];
+  if (port <= 0)
+    return nil;
+
+  NSString *scheme = @"http";
+  NSString *type = [service type];
+  if ([type hasPrefix: @"_https."])
+    scheme = @"https";
+
+  NSString *path = nil;
+  NSData *txtData = [service TXTRecordData];
+  if (txtData)
+    {
+      NSDictionary *txtDict = [NSNetService dictionaryFromTXTRecordData: txtData];
+      NSData *pathData = [txtDict objectForKey: @"path"];
+      if (pathData)
+        {
+          NSString *rawPath = [[NSString alloc] initWithData: pathData
+                                                   encoding: NSUTF8StringEncoding];
+          if (rawPath)
+            {
+              if ([rawPath hasPrefix: @"/"])
+                path = rawPath;
+              else
+                path = [@"/" stringByAppendingString: rawPath];
+            }
+          RELEASE(rawPath);
+        }
+    }
+
+  NSString *urlString;
+  if (path)
+    {
+      if ((port == 80 && [scheme isEqual: @"http"])
+          || (port == 443 && [scheme isEqual: @"https"]))
+        urlString = [NSString stringWithFormat: @"%@://%@%@",
+                              scheme, host, path];
+      else
+        urlString = [NSString stringWithFormat: @"%@://%@:%d%@",
+                              scheme, host, port, path];
+    }
+  else
+    {
+      if ((port == 80 && [scheme isEqual: @"http"])
+          || (port == 443 && [scheme isEqual: @"https"]))
+        urlString = [NSString stringWithFormat: @"%@://%@", scheme, host];
+      else
+        urlString = [NSString stringWithFormat: @"%@://%@:%d",
+                              scheme, host, port];
+    }
+
+  return [NSURL URLWithString: urlString];
+}
+
+- (void)openSelectedServiceInBrowser:(id)sender
+{
+  NSURL *url = [self selectedServiceURL];
+  if (!url)
+    {
+      NSBeep();
+      return;
+    }
+
+  NSString *scheme = [url scheme];
+  NSString *appName = [[NSWorkspace sharedWorkspace]
+    getBestAppInRole: nil forScheme: scheme];
+
+  if (appName == nil)
+    {
+      NSBeep();
+      return;
+    }
+
+  NSString *launchPath = nil;
+  if ([appName isAbsolutePath])
+    {
+      if ([[NSFileManager defaultManager] isExecutableFileAtPath: appName])
+        launchPath = appName;
+    }
+  else
+    {
+      launchPath = [[NSWorkspace sharedWorkspace]
+        locateApplicationBinary: appName];
+    }
+
+  if (launchPath == nil)
+    {
+      NSBeep();
+      return;
+    }
+
+  NSTask *task = [[NSTask alloc] init];
+  [task setLaunchPath: launchPath];
+  [task setArguments: [NSArray arrayWithObject: [url absoluteString]]];
+  [task setStandardInput: [NSFileHandle fileHandleWithNullDevice]];
+  [task setStandardOutput: [NSFileHandle fileHandleWithNullDevice]];
+  [task setStandardError: [NSFileHandle fileHandleWithNullDevice]];
+  [task launch];
+  RELEASE(task);
+}
+
+- (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item
 {
   return YES;
 }
 
-- (void)windowWillClose:(NSNotification *)aNotification
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)theApp
 {
-  if ([aNotification object] == window)
-    {
-      [NSApp terminate: self];
-    }
+  return YES;
 }
 
 @end

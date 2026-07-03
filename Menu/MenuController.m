@@ -68,13 +68,11 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
 }
 #endif
 
-// DBus file descriptor monitoring using NSFileHandle
-// Minimum interval (seconds) between consecutive DBus fd notifications to prevent CPU spin
-static NSTimeInterval _lastDbusNotificationTime = 0;
-static NSUInteger _rapidDbusNotificationCount = 0;
-#define DBUS_MIN_NOTIFICATION_INTERVAL 0.005   // 5ms minimum gap
-#define DBUS_RAPID_FIRE_THRESHOLD 100          // number of rapid fires before back-off
-#define DBUS_BACKOFF_INTERVAL 0.1              // 100ms cooldown after rapid fire
+// Minimum delay (seconds) between DBus fd re-arms.
+// Prevents CPU tight-loop when GNUstep NSFileHandle fires
+// continuously because the DBus socket is always readable
+// (libdbus internal buffering keeps select() returning "ready").
+#define DBUS_REARM_DELAY 0.1
 
 - (void)dbusFileDescriptorReady:(NSNotification *)notification {
     MENU_PROFILE_BEGIN(dbusFileDescriptorReady);
@@ -88,36 +86,11 @@ static NSUInteger _rapidDbusNotificationCount = 0;
         return;
     }
 
-    // TIGHT-LOOP GUARD: Throttle rapid fd-ready notifications
-    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-    NSTimeInterval elapsed = now - _lastDbusNotificationTime;
-    if (elapsed < DBUS_MIN_NOTIFICATION_INTERVAL) {
-        _rapidDbusNotificationCount++;
-        if (_rapidDbusNotificationCount > DBUS_RAPID_FIRE_THRESHOLD) {
-            // Too many rapid fires - back off with a delayed re-arm instead of immediate
-            NSDebugLLog(@"gwcomp", @"MenuController: DBus fd rapid-fire detected (%lu in %.3fs) - backing off %.0fms",
-                  (unsigned long)_rapidDbusNotificationCount, elapsed, DBUS_BACKOFF_INTERVAL * 1000);
-            _rapidDbusNotificationCount = 0;
-            if (self.dbusFileHandle) {
-                [NSTimer scheduledTimerWithTimeInterval:DBUS_BACKOFF_INTERVAL
-                                                target:self
-                                              selector:@selector(rearmDbusFileHandle:)
-                                              userInfo:nil
-                                               repeats:NO];
-            }
-                        MENU_PROFILE_END(dbusFileDescriptorReady);
-            return;
-        }
-    } else {
-        _rapidDbusNotificationCount = 0;
-    }
-    _lastDbusNotificationTime = now;
-
     NSDebugLog(@"MenuController: DBus file descriptor reported data available");
-    
+
     // Lock the menu window from redrawing during DBus processing to prevent flashing
     [self.menuBar disableFlushWindow];
-    
+
     @try {
         [[MenuProtocolManager sharedManager] processDBusMessages];
     }
@@ -130,8 +103,23 @@ static NSUInteger _rapidDbusNotificationCount = 0;
         [self.menuBar flushWindow];
     }
 
-    // Re-arm the watcher so we continue receiving notifications
-    // Only re-arm if the file handle is still valid
+    // Delay re-arm to prevent CPU tight-loop.  The DBus fd is almost always
+    // "ready to read" on GNUstep (libdbus buffers internally), so immediate
+    // re-arm would fire again on the very next run-loop iteration, spinning
+    // the CPU indefinitely.  A short delay breaks the cycle while keeping
+    // DBus message latency under 150 ms — more than adequate for menu updates.
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(rearmDBusSource)
+                                               object:nil];
+    [self performSelector:@selector(rearmDBusSource)
+               withObject:nil
+               afterDelay:DBUS_REARM_DELAY];
+
+    MENU_PROFILE_END(dbusFileDescriptorReady);
+}
+
+- (void)rearmDBusSource
+{
     if (self.dbusFileHandle) {
         @try {
             [self.dbusFileHandle waitForDataInBackgroundAndNotify];
@@ -141,34 +129,6 @@ static NSUInteger _rapidDbusNotificationCount = 0;
             self.dbusFileHandle = nil;
         }
     }
-
-    MENU_PROFILE_END(dbusFileDescriptorReady);
-}
-
-- (void)rearmDbusFileHandle:(NSTimer *)timer
-{
-    MENU_PROFILE_BEGIN(rearmDbusFileHandle);
-
-    (void)timer;
-    if (self.dbusFileHandle) {
-        // Process any accumulated messages first
-        @try {
-            [[MenuProtocolManager sharedManager] processDBusMessages];
-        }
-        @catch (NSException *exception) {
-            NSDebugLLog(@"gwcomp", @"MenuController: Exception processing DBus messages during re-arm: %@", exception);
-        }
-        // Now re-arm
-        @try {
-            [self.dbusFileHandle waitForDataInBackgroundAndNotify];
-        }
-        @catch (NSException *exception) {
-            NSDebugLLog(@"gwcomp", @"MenuController: Exception re-arming DBus file handle after backoff: %@", exception);
-            self.dbusFileHandle = nil;
-        }
-    }
-
-    MENU_PROFILE_END(rearmDbusFileHandle);
 }
 
 - (void)pollDBusMessages:(NSTimer *)timer
@@ -901,12 +861,12 @@ static NSUInteger _rapidDbusNotificationCount = 0;
         
         // Set up timer-based D-Bus polling ONLY as fallback when fd monitoring is unavailable
         if (!self.dbusFileHandle) {
-            self.dbusPollingTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 // 500ms fallback
+            self.dbusPollingTimer = [NSTimer scheduledTimerWithTimeInterval:2.0
                                                                       target:self
                                                                     selector:@selector(pollDBusMessages:)
                                                                     userInfo:nil
                                                                      repeats:YES];
-            NSDebugLLog(@"gwcomp", @"MenuController: D-Bus polling timer set up as fallback (500ms interval)");
+            NSDebugLLog(@"gwcomp", @"MenuController: D-Bus polling timer set up as fallback (2s interval)");
         } else {
             NSDebugLLog(@"gwcomp", @"MenuController: Using fd-based monitoring, no polling timer needed");
         }

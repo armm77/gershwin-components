@@ -103,9 +103,17 @@
 
 - (void)update
 {
-    [self updateCPUUsage];
-    [self updateRAMUsage];
-    [self updateDetailMenu];
+    // Read /proc/stat and /proc/meminfo on a background queue to avoid
+    // blocking the main run loop every second.
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        [self updateCPUUsage];
+        [self updateRAMUsage];
+
+        // Publish results and rebuild the detail menu on the main thread.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateDetailMenu];
+        });
+    });
 }
 
 - (void)handleClick

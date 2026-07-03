@@ -12,7 +12,9 @@
 #import <AppKit/NSTextView.h>
 #import <Foundation/NSNetServices.h>
 
-@interface NetworkBrowser : NSObject <NSNetServiceBrowserDelegate, NSNetServiceDelegate, NSTableViewDataSource, NSTableViewDelegate>
+@interface NetworkBrowser : NSResponder
+    <NSNetServiceBrowserDelegate, NSNetServiceDelegate,
+     NSTableViewDataSource, NSTableViewDelegate>
 {
   NSWindow *window;
   NSTableView *typesTable;
@@ -26,6 +28,7 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification;
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)theApp;
-- (void)windowWillClose:(NSNotification *)aNotification;
+- (void)openSelectedServiceInBrowser:(id)sender;
+- (NSURL *)selectedServiceURL;
 
 @end
