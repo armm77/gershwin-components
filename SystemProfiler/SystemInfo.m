@@ -67,7 +67,8 @@
 #elif defined(__OpenBSD__)
 	char buf[256];
 	size_t len = sizeof(buf);
-	if (sysctlbyname("hw.model", buf, &len, NULL, 0) == 0) {
+	int mib[2] = {CTL_HW, HW_MODEL};
+	if (sysctl(mib, 2, buf, &len, NULL, 0) == 0) {
 		return [NSString stringWithUTF8String:buf];
 	}
 	return @"Unknown";
@@ -101,10 +102,19 @@
 		return [NSString stringWithFormat:@"%.2f GB", gb];
 	}
 	return @"Unknown";
-#elif defined(__FreeBSD__) || defined(__OpenBSD__)
+#elif defined(__FreeBSD__)
 	unsigned long long physmem = 0;
 	size_t len = sizeof(physmem);
 	if (sysctlbyname("hw.physmem", &physmem, &len, NULL, 0) == 0) {
+		double gb = (double) physmem / (1024.0 * 1024.0 * 1024.0);
+		return [NSString stringWithFormat:@"%.2f GB", gb];
+	}
+	return @"Unknown";
+#elif defined(__OpenBSD__)
+	unsigned long long physmem = 0;
+	size_t len = sizeof(physmem);
+	int mib[2] = {CTL_HW, HW_PHYSMEM};
+	if (sysctl(mib, 2, &physmem, &len, NULL, 0) == 0) {
 		double gb = (double) physmem / (1024.0 * 1024.0 * 1024.0);
 		return [NSString stringWithFormat:@"%.2f GB", gb];
 	}
@@ -211,10 +221,30 @@
 		return r;
 	}
 	return @"Unknown";
-#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#elif defined(__FreeBSD__) || defined(__NetBSD__)
 	struct timeval boottime;
 	size_t len = sizeof(boottime);
 	if (sysctlbyname("kern.boottime", &boottime, &len, NULL, 0) == 0) {
+		struct timeval now;
+		if (gettimeofday(&now, NULL) == 0) {
+			long uptime = now.tv_sec - boottime.tv_sec;
+			if (uptime < 0) uptime = 0;
+			unsigned long d = uptime / 86400;
+			unsigned long h = (uptime / 3600) % 24;
+			unsigned long m = (uptime / 60) % 60;
+			unsigned long s = uptime % 60;
+			NSMutableString *r = [NSMutableString string];
+			if (d > 0) [r appendFormat:@"%lu day%@, ", d, (d == 1) ? @"" : @"s"];
+			[r appendFormat:@"%lu:%02lu:%02lu", h, m, s];
+			return r;
+		}
+	}
+	return @"Unknown";
+#elif defined(__OpenBSD__)
+	struct timeval boottime;
+	size_t len = sizeof(boottime);
+	int mib[2] = {CTL_KERN, KERN_BOOTTIME};
+	if (sysctl(mib, 2, &boottime, &len, NULL, 0) == 0) {
 		struct timeval now;
 		if (gettimeofday(&now, NULL) == 0) {
 			long uptime = now.tv_sec - boottime.tv_sec;
@@ -955,7 +985,8 @@
 #elif defined(__OpenBSD__)
 	char buf[64];
 	size_t len = sizeof(buf);
-	if (sysctlbyname("hw.uuid", buf, &len, NULL, 0) == 0) {
+	int mib[2] = {CTL_HW, HW_UUID};
+	if (sysctl(mib, 2, buf, &len, NULL, 0) == 0) {
 		if (strlen(buf) > 0) return [NSString stringWithUTF8String:buf];
 	}
 	return @"Unknown";
@@ -1095,7 +1126,7 @@
 		}
 	}
 	return @"Unknown";
-#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#elif defined(__FreeBSD__) || defined(__NetBSD__)
 	{
 		FILE *fp = popen("kenv -q smbios.system.product 2>/dev/null", "r");
 		if (fp) {
@@ -1117,6 +1148,8 @@
 			if (strlen(buf) > 0) return [NSString stringWithUTF8String:buf];
 		}
 	}
+	return @"Unknown";
+#elif defined(__OpenBSD__)
 	return @"Unknown";
 #else
 	return @"Unknown";
@@ -1142,7 +1175,7 @@
 		}
 	}
 	return @"Unknown";
-#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#elif defined(__FreeBSD__) || defined(__NetBSD__)
 	{
 		FILE *fp = popen("kenv -q smbios.system.maker 2>/dev/null", "r");
 		if (fp) {
@@ -1164,6 +1197,8 @@
 			if (strlen(buf) > 0) return [NSString stringWithUTF8String:buf];
 		}
 	}
+	return @"Unknown";
+#elif defined(__OpenBSD__)
 	return @"Unknown";
 #else
 	return @"Unknown";
@@ -1194,7 +1229,7 @@
 		}
 	}
 	return @"Unknown";
-#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#elif defined(__FreeBSD__) || defined(__NetBSD__)
 	{
 		FILE *fp = popen("kenv -q smbios.system.serial 2>/dev/null", "r");
 		if (fp) {
@@ -1216,6 +1251,8 @@
 			if (strlen(buf) > 0) return [NSString stringWithUTF8String:buf];
 		}
 	}
+	return @"Unknown";
+#elif defined(__OpenBSD__)
 	return @"Unknown";
 #else
 	return @"Unknown";
@@ -1366,6 +1403,7 @@
 	return a;
 }
 
+#if defined(__linux__)
 static void _walkDTDir(NSString *dirPath, NSString *relPath, NSMutableArray *pairs)
 {
 	NSFileManager *fm = [NSFileManager defaultManager];
@@ -1397,6 +1435,7 @@ static void _walkDTDir(NSString *dirPath, NSString *relPath, NSMutableArray *pai
 		}
 	}
 }
+#endif
 
 + (NSArray *)deviceTreeInfo
 {
