@@ -1,0 +1,211 @@
+/*
+ * Copyright (c) 2026 Simon Peter
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+#import "StickyNoteView.h"
+#import "StickyNoteController.h"
+
+#define TITLE_BAR_HEIGHT 22.0
+#define BUTTON_SIZE 12.0
+#define BUTTON_MARGIN 6.0
+#define RESIZE_HANDLE_SIZE 12.0
+
+@implementation StickyNoteView
+
+@synthesize backgroundColor;
+@synthesize textView;
+
+- (id)initWithFrame:(NSRect)frame
+{
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.backgroundColor = [NSColor yellowColor];
+
+        NSRect scrollRect = NSMakeRect(0, TITLE_BAR_HEIGHT,
+                                        frame.size.width,
+                                        frame.size.height - TITLE_BAR_HEIGHT);
+
+        scrollView = [[NSScrollView alloc] initWithFrame:scrollRect];
+        [scrollView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        [scrollView setBorderType:NSNoBorder];
+        [scrollView setHasVerticalScroller:NO];
+        [scrollView setHasHorizontalScroller:NO];
+        [scrollView setDrawsBackground:NO];
+        [[scrollView contentView] setDrawsBackground:NO];
+
+        textView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0,
+                                               scrollRect.size.width,
+                                               scrollRect.size.height)];
+        [textView setDrawsBackground:NO];
+        [textView setRichText:YES];
+        [textView setUsesFontPanel:YES];
+        [textView setUsesFindPanel:YES];
+        [textView setFont:[NSFont fontWithName:@"Helvetica" size:14.0]];
+        [textView setAutoresizingMask:NSViewWidthSizable];
+
+        [scrollView setDocumentView:textView];
+        [textView release];
+
+        [self addSubview:scrollView];
+        [scrollView release];
+    }
+    return self;
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSRect bounds = [self bounds];
+    BOOL isKey = [[self window] isKeyWindow];
+
+    [backgroundColor set];
+    NSRectFill(bounds);
+
+    if (isKey) {
+        NSColor *darker = [backgroundColor blendedColorWithFraction:0.2 ofColor:[NSColor blackColor]];
+        if (!darker) darker = backgroundColor;
+        [darker set];
+        NSRect titleBar = NSMakeRect(0, 0, bounds.size.width, TITLE_BAR_HEIGHT);
+        NSRectFill(titleBar);
+
+        CGFloat buttonY = (TITLE_BAR_HEIGHT - BUTTON_SIZE) / 2;
+        CGFloat closeX = BUTTON_MARGIN;
+
+        NSRect closeRect = NSMakeRect(closeX, buttonY, BUTTON_SIZE, BUTTON_SIZE);
+        [[NSColor colorWithDeviceRed:0.9 green:0.3 blue:0.3 alpha:1.0] set];
+        [[NSBezierPath bezierPathWithOvalInRect:closeRect] fill];
+
+        [[NSColor whiteColor] set];
+        [NSBezierPath setDefaultLineWidth:2.0];
+        NSBezierPath *xPath = [NSBezierPath bezierPath];
+        [xPath moveToPoint:NSMakePoint(NSMinX(closeRect) + 3.5, NSMinY(closeRect) + 3.5)];
+        [xPath lineToPoint:NSMakePoint(NSMaxX(closeRect) - 3.5, NSMaxY(closeRect) - 3.5)];
+        [xPath moveToPoint:NSMakePoint(NSMaxX(closeRect) - 3.5, NSMinY(closeRect) + 3.5)];
+        [xPath lineToPoint:NSMakePoint(NSMinX(closeRect) + 3.5, NSMaxY(closeRect) - 3.5)];
+        [xPath stroke];
+
+        NSColor *resizeColor = [darker blendedColorWithFraction:0.3 ofColor:[NSColor blackColor]];
+        if (!resizeColor) resizeColor = [NSColor darkGrayColor];
+        [resizeColor set];
+        CGFloat rx = bounds.size.width - RESIZE_HANDLE_SIZE;
+        CGFloat ry = bounds.size.height - RESIZE_HANDLE_SIZE;
+        NSBezierPath *grip = [NSBezierPath bezierPath];
+        [grip moveToPoint:NSMakePoint(rx + RESIZE_HANDLE_SIZE, ry + RESIZE_HANDLE_SIZE)];
+        [grip lineToPoint:NSMakePoint(rx + RESIZE_HANDLE_SIZE, ry)];
+        [grip lineToPoint:NSMakePoint(rx, ry)];
+        [grip lineToPoint:NSMakePoint(rx + 2, ry + 1)];
+        [grip lineToPoint:NSMakePoint(rx + RESIZE_HANDLE_SIZE - 2, ry + RESIZE_HANDLE_SIZE - 1)];
+        [grip closePath];
+        [grip fill];
+    }
+}
+
+- (BOOL)isFlipped
+{
+    return YES;
+}
+
+- (BOOL)isInTitleBar:(NSPoint)point
+{
+    return (point.y >= 0 && point.y < TITLE_BAR_HEIGHT);
+}
+
+- (BOOL)isInResizeHandle:(NSPoint)point
+{
+    NSRect bounds = [self bounds];
+    NSRect handle = NSMakeRect(bounds.size.width - RESIZE_HANDLE_SIZE,
+                               bounds.size.height - RESIZE_HANDLE_SIZE,
+                               RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE);
+    return NSPointInRect(point, handle);
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+
+    if ([self isInResizeHandle:point]) {
+        resizing = YES;
+        resizeStartPoint = [event locationInWindow];
+        resizeStartFrame = [[self window] frame];
+        return;
+    }
+
+    if ([self isInTitleBar:point]) {
+        CGFloat buttonY = (TITLE_BAR_HEIGHT - BUTTON_SIZE) / 2;
+        CGFloat closeX = BUTTON_MARGIN;
+
+        if (point.x >= closeX && point.x <= closeX + BUTTON_SIZE &&
+            point.y >= buttonY && point.y <= buttonY + BUTTON_SIZE) {
+            id delegate = [(NSWindow *)[self window] delegate];
+            if (delegate && [delegate respondsToSelector:@selector(closeNote)]) {
+                [delegate closeNote];
+            }
+            return;
+        }
+
+        [[self window] mouseDown:event];
+    } else {
+        [super mouseDown:event];
+    }
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    if (resizing) {
+        NSPoint current = [event locationInWindow];
+        NSSize newSize = resizeStartFrame.size;
+        newSize.width += current.x - resizeStartPoint.x;
+        newSize.height -= current.y - resizeStartPoint.y;
+        if (newSize.width < 100) newSize.width = 100;
+        if (newSize.height < 80) newSize.height = 80;
+        NSRect newFrame = resizeStartFrame;
+        newFrame.origin.y -= newSize.height - resizeStartFrame.size.height;
+        newFrame.size = newSize;
+        [[self window] setFrame:newFrame display:YES animate:NO];
+        return;
+    }
+    [super mouseDragged:event];
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    if (resizing) {
+        resizing = NO;
+        return;
+    }
+    [super mouseUp:event];
+}
+
+- (void)rightMouseDown:(NSEvent *)event
+{
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+
+    if ([self isInTitleBar:point]) {
+        NSMenu *contextMenu = [[NSMenu alloc] initWithTitle:@"Note Context"];
+        [contextMenu addItemWithTitle:@"Close" action:@selector(closeNote:) keyEquivalent:@""];
+        [contextMenu addItem:[NSMenuItem separatorItem]];
+        [contextMenu addItemWithTitle:@"Float on Top" action:@selector(makeFloatOnTop:) keyEquivalent:@""];
+        [contextMenu addItemWithTitle:@"Translucent" action:@selector(makeTranslucent:) keyEquivalent:@""];
+        [contextMenu addItem:[NSMenuItem separatorItem]];
+        [contextMenu addItemWithTitle:@"Note Info" action:@selector(showNoteInfo:) keyEquivalent:@""];
+        [contextMenu popUpMenuPositioningItem:nil atLocation:point inView:self];
+        [contextMenu release];
+    }
+}
+
+- (void)setNoteColor:(NSColor *)color
+{
+    [color retain];
+    [backgroundColor release];
+    backgroundColor = color;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)dealloc
+{
+    [backgroundColor release];
+    [super dealloc];
+}
+
+@end

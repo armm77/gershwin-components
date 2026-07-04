@@ -1,0 +1,29 @@
+/*
+ * Copyright (c) 2026 Simon Peter
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+#import <AppKit/NSWindow.h>
+
+@interface StickyNoteWindow : NSWindow
+{
+    BOOL isCollapsed;
+    NSRect expandedFrame;
+    BOOL mouseDownInTitleBar;
+    NSPoint mouseDownLocation;
+}
+
+@property (nonatomic, assign) BOOL isCollapsed;
+@property (nonatomic, assign) NSRect expandedFrame;
+@property (nonatomic, assign) BOOL mouseDownInTitleBar;
+@property (nonatomic, assign) NSPoint mouseDownLocation;
+
+- (void)collapse;
+- (void)expand;
+- (void)toggleCollapse;
+- (void)mouseDown:(NSEvent *)event;
+- (void)mouseDragged:(NSEvent *)event;
+- (void)mouseUp:(NSEvent *)event;
+
+@end
