@@ -4,6 +4,9 @@
 
 include $(GNUSTEP_MAKEFILES)/common.make
 
+GNUSTEP_SYSTEM_APPS := $(GNUSTEP_SYSTEM_APPS)/Utilities
+GNUSTEP_LOCAL_APPS := $(GNUSTEP_LOCAL_APPS)/Utilities
+
 APP_NAME = Console
 VERSION = 1.0
 
@@ -34,3 +37,6 @@ Console_LDFLAGS = -lgnustep-base -lgnustep-gui -Wl,--disable-new-dtags -Wl,-rpat
 ADDITIONAL_OBJCFLAGS += -Wno-import
 
 include $(GNUSTEP_MAKEFILES)/application.make
+
+before-install::
+	mkdir -p $(GNUSTEP_APPS)

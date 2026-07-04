@@ -1,5 +1,8 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
+GNUSTEP_SYSTEM_APPS := $(GNUSTEP_SYSTEM_APPS)/Utilities
+GNUSTEP_LOCAL_APPS := $(GNUSTEP_LOCAL_APPS)/Utilities
+
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
 APP_NAME = Screenshot
@@ -52,6 +55,9 @@ Screenshot_GUI_LIBS += -lX11
 -include GNUmakefile.preamble
 
 include $(GNUSTEP_MAKEFILES)/application.make
+
+before-install::
+	mkdir -p $(GNUSTEP_APPS)
 
 # Ensure Info.plist is copied into the built app and Info-gnustep is generated from it
 # Make 'all' depend on copying/generation so it happens during normal builds

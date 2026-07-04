@@ -4,6 +4,9 @@
 
 include $(GNUSTEP_MAKEFILES)/common.make
 
+GNUSTEP_SYSTEM_APPS := $(GNUSTEP_SYSTEM_APPS)/Utilities
+GNUSTEP_LOCAL_APPS := $(GNUSTEP_LOCAL_APPS)/Utilities
+
 APP_NAME = Processes
 VERSION = 1.0
 
@@ -35,3 +38,6 @@ main.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
 ADDITIONAL_OBJCFLAGS += -Wno-import
 
 include $(GNUSTEP_MAKEFILES)/application.make
+
+before-install::
+	mkdir -p $(GNUSTEP_APPS)
