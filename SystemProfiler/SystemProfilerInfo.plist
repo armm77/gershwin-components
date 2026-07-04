@@ -1,0 +1,15 @@
+{
+    ApplicationDescription = "System information profiler";
+    ApplicationIcon = "SystemProfiler.png";
+    ApplicationName = SystemProfiler;
+    ApplicationRelease = "1.0";
+    Authors = (
+        "Simon Peter"
+    );
+    Copyright = "Copyright (C) 2026";
+    FullVersionID = "1.0";
+    NSExecutable = SystemProfiler;
+    NSIcon = "SystemProfiler.png";
+    NSPrincipalClass = NSApplication;
+    NSRole = Application;
+}
