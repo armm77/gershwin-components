@@ -68,6 +68,7 @@
 /* System submenu actions */
 - (void)openSystemPreferences:(NSMenuItem *)sender;
 - (void)openApplicationBundle:(NSMenuItem *)sender;
+- (void)openFolderInWorkspace:(NSMenuItem *)sender;
 
 /* Debug */
 - (void)debugLogCurrentMenuState;

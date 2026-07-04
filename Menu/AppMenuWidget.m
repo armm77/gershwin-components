@@ -104,6 +104,14 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     return NO;
 }
 
+/* Override mouseUp: as a no-op to break the responder chain.  Without this,
+ * [super mouseUp:theEvent] in NSView forwards the event up the responder
+ * chain back to AppMenuWidget, causing infinite recursion. */
+- (void)mouseUp:(NSEvent *)theEvent
+{
+    (void)theEvent;
+}
+
 @end
 
 /* ── Private interface ───────────────────────────────────────────── */
@@ -1078,11 +1086,19 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     NSMutableDictionary *tree = [NSMutableDictionary dictionary];
     for (NSDictionary *entry in [appsByKey allValues]) {
         NSArray *relPath = entry[@"relPath"];
+        NSString *appPath = entry[@"path"];
         NSMutableDictionary *node = tree;
+        /* Compute the absolute root path for this app entry. */
+        NSString *dirPath = [appPath stringByDeletingLastPathComponent];
+        for (NSUInteger i = 0; i < [relPath count]; i++) {
+            dirPath = [dirPath stringByDeletingLastPathComponent];
+        }
         for (NSString *component in relPath) {
+            dirPath = [dirPath stringByAppendingPathComponent:component];
             NSMutableDictionary *child = node[component];
             if (!child) {
                 child = [NSMutableDictionary dictionary];
+                child[@"_path"] = dirPath;
                 node[component] = child;
             }
             node = child;
@@ -1170,6 +1186,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
     for (NSString *key in [tree allKeys]) {
         if ([key isEqualToString:@"_apps"]) continue;
+        if ([key isEqualToString:@"_path"]) continue;
         [entries addObject:@{@"_type": @"dir", @"_name": key, @"_tree": tree[key]}];
     }
 
@@ -1187,9 +1204,20 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     for (NSDictionary *entry in entries) {
         if ([entry[@"_type"] isEqualToString:@"dir"]) {
             NSDictionary *subtree = entry[@"_tree"];
+            NSString *dirPath = subtree[@"_path"];
             NSMenu *submenu = [[NSMenu alloc] initWithTitle:entry[@"_name"]];
             [self addMenuItemsFromTree:subtree toMenu:submenu];
             if ([submenu numberOfItems] > 0) {
+                /* Prepend an "Open in Workspace" item. */
+                NSMenuItem *openItem = [[NSMenuItem alloc] initWithTitle:
+                    [NSString stringWithFormat:NSLocalizedString(@"Open “%@”", nil), entry[@"_name"]]
+                                                                    action:@selector(openFolderInWorkspace:)
+                                                             keyEquivalent:@""];
+                [openItem setTarget:self];
+                [openItem setRepresentedObject:dirPath];
+                [submenu insertItem:openItem atIndex:0];
+                [submenu insertItem:[NSMenuItem separatorItem] atIndex:1];
+
                 NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:entry[@"_name"]
                                                               action:nil keyEquivalent:@""];
                 [item setSubmenu:submenu];
@@ -1260,6 +1288,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 - (void)mouseUp:(NSEvent *)theEvent
 {
     if (self.menuView) [self.menuView mouseUp:theEvent];
+    [super mouseUp:theEvent];
 }
 
 #pragma mark - Actions
@@ -1332,6 +1361,30 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         if ([ws openFile:path]) return;
 
         NSLog(@"AppMenuWidget: Failed to launch application at %@", path);
+    });
+}
+
+- (void)openFolderInWorkspace:(NSMenuItem *)sender
+{
+    NSString *path = [sender representedObject];
+    if (!path) return;
+
+    NSMenu *parentMenu = [sender menu];
+    if (parentMenu && [parentMenu respondsToSelector:@selector(cancelTracking)]) {
+        [parentMenu performSelector:@selector(cancelTracking)];
+    }
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSURL *fileURL = [NSURL fileURLWithPath:path];
+        NSString *uri = [fileURL absoluteString];
+
+        NSDebugLLog(@"gwcomp", @"AppMenuWidget: Opening folder in Workspace: %@", uri);
+
+        [[GNUDBusConnection sessionBus] callMethod:@"ShowFolders"
+                                        onService:@"org.freedesktop.FileManager1"
+                                      objectPath:@"/org/freedesktop/FileManager1"
+                                       interface:@"org.freedesktop.FileManager1"
+                                       arguments:@[@[uri], @""]];
     });
 }
 
