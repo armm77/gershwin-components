@@ -404,6 +404,38 @@ static NSString *const kMicControl = @"Mic";
 
 #pragma mark - Device Probing
 
+// Returns 1 if usable, 0 if not usable, -1 if undetermined (format issue).
+- (int)probeOutputWithFormat:(NSString *)format
+                    channels:(NSString *)channels
+                       rate:(NSString *)rate
+                    probeId:(NSString *)probeId
+{
+    // Build a shell command that pipes a tiny amount of data through aplay.
+    // Using -d 1 would play for 1 full second on success, so instead we pipe
+    // just 100 bytes via dd and let aplay exit as soon as stdin reaches EOF.
+    NSMutableString *cmd = [NSMutableString string];
+    [cmd appendString:@"dd if=/dev/zero bs=100 count=1 2>/dev/null | "];
+    [cmd appendFormat:@"%@ -D %@ -q", aplayPath, probeId];
+    if (format) {
+        [cmd appendFormat:@" -f %@", format];
+    }
+    if (channels) {
+        [cmd appendFormat:@" -c %@", channels];
+    }
+    if (rate) {
+        [cmd appendFormat:@" -r %@", rate];
+    }
+    NSString *output = [self runCommandCaptureError:@"/bin/sh"
+                                      withArguments:@[@"-c", cmd]];
+    if (!output) return 1; // Could not launch command → assume usable
+    if ([output length] == 0) return 1; // Command ran, no errors → success
+    if ([output containsString:@"Device or resource busy"]) return 1;
+    if ([output containsString:@"audio open error"]) return 0;
+    // Other errors (format not available, etc.) → device may still work
+    // with a different format; caller should decide.
+    return -1;
+}
+
 - (BOOL)isOutputDeviceUsable:(AudioDevice *)device
 {
     if (!aplayPath) return NO;
@@ -418,22 +450,56 @@ static NSString *const kMicControl = @"Mic";
     // just being used by another process (e.g. currently playing audio),
     // so we must not filter it out.
 
+    // Some devices (HDMI/SPDIF) do not support the default S16_LE format.
+    // If the first probe fails with a format-related error, retry with
+    // IEC958_SUBFRAME_LE which is the standard for HDMI audio.
+
     NSString *probeId = [NSString stringWithFormat:@"hw:%d,%d",
                          device.cardIndex, device.deviceIndex];
-    NSString *output = [self runCommandCaptureError:aplayPath
-                                      withArguments:@[@"-D", probeId, @"-d", @"1",
-                                                      @"-q", @"/dev/zero"]];
-    if (output) {
-        // Device or resource busy → physically present, just in use.
-        if ([output containsString:@"Device or resource busy"]) {
-            return YES;
-        }
-        // Any other open error means no physical sink is connected.
-        if ([output containsString:@"audio open error"]) {
-            return NO;
-        }
-    }
+
+    // Try standard S16_LE first
+    int result = [self probeOutputWithFormat:nil channels:nil rate:nil probeId:probeId];
+    if (result != -1) return (BOOL)result;
+
+    // Format error — retry with IEC958_SUBFRAME_LE (HDMI/SPDIF)
+    result = [self probeOutputWithFormat:@"IEC958_SUBFRAME_LE"
+                                channels:@"2" rate:@"48000" probeId:probeId];
+    if (result != -1) return (BOOL)result;
+
+    // Both probes were inconclusive (e.g. format/rate/channel mismatch that
+    // neither S16_LE nor IEC958 could satisfy).  Assume the device is usable
+    // — the original probe logic treated any non-"audio open error" failure
+    // as "usable", so we preserve that fallback.
     return YES;
+}
+
+// Returns 1 if usable, 0 if not usable, -1 if undetermined (format issue).
+- (int)probeInputWithFormat:(NSString *)format
+                   channels:(NSString *)channels
+                      rate:(NSString *)rate
+                   probeId:(NSString *)probeId
+{
+    NSMutableArray *args = [NSMutableArray arrayWithObjects:
+                            @"-D", probeId, @"-d", @"1", @"-q", @"/dev/zero", nil];
+    if (format) {
+        [args addObject:@"-f"];
+        [args addObject:format];
+    }
+    if (channels) {
+        [args addObject:@"-c"];
+        [args addObject:channels];
+    }
+    if (rate) {
+        [args addObject:@"-r"];
+        [args addObject:rate];
+    }
+    NSString *output = [self runCommandCaptureError:arecordPath
+                                      withArguments:args];
+    if (!output) return 1;
+    if ([output length] == 0) return 1;
+    if ([output containsString:@"Device or resource busy"]) return 1;
+    if ([output containsString:@"audio open error"]) return 0;
+    return -1;
 }
 
 - (BOOL)isInputDeviceUsable:(AudioDevice *)device
@@ -442,17 +508,15 @@ static NSString *const kMicControl = @"Mic";
 
     NSString *probeId = [NSString stringWithFormat:@"hw:%d,%d",
                          device.cardIndex, device.deviceIndex];
-    NSString *output = [self runCommandCaptureError:arecordPath
-                                      withArguments:@[@"-D", probeId, @"-d", @"1",
-                                                      @"-q", @"/dev/zero"]];
-    if (output) {
-        if ([output containsString:@"Device or resource busy"]) {
-            return YES;
-        }
-        if ([output containsString:@"audio open error"]) {
-            return NO;
-        }
-    }
+
+    int result = [self probeInputWithFormat:nil channels:nil rate:nil probeId:probeId];
+    if (result != -1) return (BOOL)result;
+
+    result = [self probeInputWithFormat:@"IEC958_SUBFRAME_LE"
+                                channels:@"2" rate:@"48000" probeId:probeId];
+    if (result != -1) return (BOOL)result;
+
+    // Inconclusive — assume usable.
     return YES;
 }
 
@@ -562,8 +626,23 @@ static NSString *const kMicControl = @"Mic";
 
             device.volumeControl = volControl;
             [volControl release];
+            return;
         }
     }
+
+    // No hardware mixer controls found (e.g. HDMI without PCM volume).
+    // Create a read-only volume control at 100% so the device is still
+    // usable for audio output, but the volume slider will be disabled.
+    AudioControl *volControl = [[AudioControl alloc] init];
+    volControl.identifier = @"";
+    volControl.name = @"";
+    volControl.value = 1.0;
+    volControl.minValue = 0.0;
+    volControl.maxValue = 1.0;
+    volControl.isReadOnly = YES;
+    volControl.hasMuteControl = NO;
+    device.volumeControl = volControl;
+    [volControl release];
 }
 
 - (NSString *)preferredMixerControlNameForDevice:(AudioDevice *)device 
@@ -888,6 +967,10 @@ static NSString *const kMicControl = @"Mic";
 {
     if (!defaultOutput) return 0.0;
 
+    if (defaultOutput.volumeControl && defaultOutput.volumeControl.isReadOnly) {
+        return defaultOutput.volumeControl.value;
+    }
+
     NSString *controlName = [self preferredMixerControlNameForDevice:defaultOutput isOutput:YES];
     if (!controlName) {
         return defaultOutput.volumeControl ? defaultOutput.volumeControl.value : 0.0;
@@ -931,6 +1014,12 @@ static NSString *const kMicControl = @"Mic";
     if (volume < 0.0) volume = 0.0;
     if (volume > 1.0) volume = 1.0;
 
+    // ReadOnly devices have no hardware volume control — cache value only.
+    if (defaultOutput.volumeControl && defaultOutput.volumeControl.isReadOnly) {
+        defaultOutput.volumeControl.value = volume;
+        return YES;
+    }
+
     int percent = (int)(volume * 100);
     NSString *value = [NSString stringWithFormat:@"%d%%", percent];
     NSDebugLLog(@"gwcomp", @"ALSABackend:   setting to %@, card %d", value, currentOutputCard);
@@ -942,7 +1031,7 @@ static NSString *const kMicControl = @"Mic";
 
     BOOL success = [self setMixerControl:controlName
                                    value:value
-                                    card:currentOutputCard];
+                                     card:currentOutputCard];
 
     if (!success) {
         NSArray *fallbackControls = @[kMasterControl, kPCMControl, kSpeakerControl, kHeadphoneControl];
@@ -973,6 +1062,10 @@ static NSString *const kMicControl = @"Mic";
 - (BOOL)isOutputMuted
 {
     if (!defaultOutput) return NO;
+
+    if (defaultOutput.volumeControl && defaultOutput.volumeControl.isReadOnly) {
+        return defaultOutput.volumeControl.isMuted;
+    }
 
     NSString *controlName = [self preferredMixerControlNameForDevice:defaultOutput isOutput:YES];
     if (!controlName) {
@@ -1014,6 +1107,12 @@ static NSString *const kMicControl = @"Mic";
 - (BOOL)setOutputMuted:(BOOL)muted
 {
     NSDebugLLog(@"gwcomp", @"ALSABackend: setOutputMuted: %@", muted ? @"YES" : @"NO");
+
+    if (defaultOutput.volumeControl && defaultOutput.volumeControl.isReadOnly) {
+        defaultOutput.volumeControl.isMuted = muted;
+        return YES;
+    }
+
     NSString *value = muted ? @"mute" : @"unmute";
     NSDebugLLog(@"gwcomp", @"ALSABackend:   setting to %@, card %d", value, currentOutputCard);
 

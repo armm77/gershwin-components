@@ -908,21 +908,29 @@ static const CGFloat kTableRowHeight = 18.0;
     float volume = [backend outputVolume];
     BOOL muted = [backend isOutputMuted];
     float balance = [backend outputBalance];
-    
+
+    BOOL readOnly = (selectedOutputDevice.volumeControl &&
+                     selectedOutputDevice.volumeControl.isReadOnly);
+
     [outputVolumeSlider setFloatValue:volume];
+    [outputVolumeSlider setEnabled:!readOnly];
     [outputMuteCheckbox setState:muted ? NSOnState : NSOffState];
+    [outputMuteCheckbox setEnabled:!readOnly];
     [outputBalanceSlider setFloatValue:balance];
-    
+    [outputBalanceSlider setEnabled:!readOnly];
+
     // Update the main volume slider on effects tab too
     NSView *effectsTabView = [[mainTabView tabViewItemAtIndex:0] view];
     for (NSView *subview in [effectsTabView subviews]) {
         if ([subview isKindOfClass:[NSSlider class]] && 
             [(NSSlider *)subview tag] == 100) {
             [(NSSlider *)subview setFloatValue:volume];
+            [(NSSlider *)subview setEnabled:!readOnly];
         }
         if ([subview isKindOfClass:[NSButton class]] && 
             [(NSButton *)subview tag] == 100) {
             [(NSButton *)subview setState:muted ? NSOnState : NSOffState];
+            [(NSButton *)subview setEnabled:!readOnly];
         }
     }
 }
@@ -939,9 +947,15 @@ static const CGFloat kTableRowHeight = 18.0;
 // Non-blocking variants that use pre-fetched values (call from main thread only)
 - (void)updateOutputControlsWithVolume:(float)volume muted:(BOOL)muted balance:(float)balance
 {
+    BOOL readOnly = (selectedOutputDevice.volumeControl &&
+                     selectedOutputDevice.volumeControl.isReadOnly);
+
     [outputVolumeSlider setFloatValue:volume];
+    [outputVolumeSlider setEnabled:!readOnly];
     [outputMuteCheckbox setState:muted ? NSOnState : NSOffState];
+    [outputMuteCheckbox setEnabled:!readOnly];
     [outputBalanceSlider setFloatValue:balance];
+    [outputBalanceSlider setEnabled:!readOnly];
 
     // Update the main volume slider on effects tab too
     NSView *effectsTabView = [[mainTabView tabViewItemAtIndex:0] view];
@@ -949,10 +963,12 @@ static const CGFloat kTableRowHeight = 18.0;
         if ([subview isKindOfClass:[NSSlider class]] &&
             [(NSSlider *)subview tag] == 100) {
             [(NSSlider *)subview setFloatValue:volume];
+            [(NSSlider *)subview setEnabled:!readOnly];
         }
         if ([subview isKindOfClass:[NSButton class]] &&
             [(NSButton *)subview tag] == 100) {
             [(NSButton *)subview setState:muted ? NSOnState : NSOffState];
+            [(NSButton *)subview setEnabled:!readOnly];
         }
     }
 }
@@ -1299,6 +1315,9 @@ static const CGFloat kTableRowHeight = 18.0;
 {
     if (isUpdatingUI) return;
 
+    if (selectedOutputDevice.volumeControl &&
+        selectedOutputDevice.volumeControl.isReadOnly) return;
+
     float volume = [(NSSlider *)sender floatValue];
     BOOL fromEffectsTab = ([sender tag] == 100);
 
@@ -1353,6 +1372,9 @@ static const CGFloat kTableRowHeight = 18.0;
 {
     NSDebugLLog(@"gwcomp", @"SoundController: UI ACTION - outputMuteChanged: (tag=%ld)", (long)[sender tag]);
     if (isUpdatingUI) return;
+
+    if (selectedOutputDevice.volumeControl &&
+        selectedOutputDevice.volumeControl.isReadOnly) return;
 
     BOOL muted = ([(NSButton *)sender state] == NSOnState);
     BOOL fromEffectsTab = ([sender tag] == 100);
