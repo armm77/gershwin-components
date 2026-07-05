@@ -66,48 +66,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
 }
 @end
 
-// 10.3-style step indicator bullet view
-@interface GSStepBulletView : NSView {
-    NSInteger _state; // 0=future, 1=current, 2=completed
-}
-@property (nonatomic, assign) NSInteger state;
-@end
-
-@implementation GSStepBulletView
-- (instancetype)initWithFrame:(NSRect)frameRect {
-    if ((self = [super initWithFrame:frameRect])) {
-        _state = 0;
-    }
-    return self;
-}
-- (void)setState:(NSInteger)state { _state = state; [self setNeedsDisplay:YES]; }
-- (NSInteger)state { return _state; }
-- (BOOL)isFlipped { return NO; }
-- (void)drawRect:(NSRect)dirtyRect {
-    [super drawRect:dirtyRect];
-    NSRect b = NSInsetRect(self.bounds, 1.0, 1.0);
-    CGFloat d = MIN(NSWidth(b), NSHeight(b));
-    NSRect circle = NSMakeRect(NSMidX(b)-d/2.0, NSMidY(b)-d/2.0, d, d);
-    NSBezierPath *path = [NSBezierPath bezierPathWithOvalInRect:circle];
-
-    NSColor *stroke = [NSColor colorWithCalibratedWhite:0.65 alpha:1.0];
-    NSColor *fill   = [NSColor colorWithCalibratedWhite:0.92 alpha:1.0];
-
-    if (_state == 1) { // current
-        fill = [NSColor colorWithCalibratedRed:0.0 green:0.478 blue:1.0 alpha:1.0];
-        stroke = [NSColor colorWithCalibratedWhite:0.35 alpha:1.0];
-    } else if (_state == 2) { // completed
-        fill = [NSColor colorWithCalibratedWhite:0.55 alpha:1.0];
-        stroke = [NSColor colorWithCalibratedWhite:0.45 alpha:1.0];
-    }
-
-    [fill setFill];
-    [path fill];
-    [stroke setStroke];
-    [path setLineWidth:1.0];
-    [path stroke];
-}
-@end
+#import "GSStepBulletView.h"
 
 @interface GSAssistantWindow ()
 
@@ -929,7 +888,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
         NSView *stepRow = [[NSView alloc] initWithFrame:stepFrame];
 
         // Bullet 16x16 at x=8
-        GSStepBulletView *bullet = [[GSStepBulletView alloc] initWithFrame:NSMakeRect(8, 8, 16, 16)];
+        GSStepBulletView *bullet = [[GSStepBulletView alloc] initWithFrame:NSMakeRect(8, 5, 16, 16)];
         [bullet setState:(i == 0 ? 1 : 0)];
 
         // Label

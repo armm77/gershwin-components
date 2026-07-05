@@ -6,13 +6,7 @@
 
 
 #import "GSInstallerAssistant.h"
-
-// Helper function to create colored box views since layers aren't available
-NSView *createColoredBox(NSRect frame, NSColor *color) {
-    NSView *box = [[NSView alloc] initWithFrame:frame];
-    // For GNUstep, we'll override drawRect to draw colored backgrounds
-    return [box autorelease];
-}
+#import "GSStepBulletView.h"
 
 @interface GSColoredView : NSView
 @property (nonatomic, strong) NSColor *backgroundColor;
@@ -172,10 +166,8 @@ NSView *createColoredBox(NSRect frame, NSColor *color) {
         NSView *stepView = [[NSView alloc] initWithFrame:stepFrame];
         
         // Create circle indicator
-        NSRect circleFrame = NSMakeRect(0, 2, 20, 20);
-        NSView *circleView = [[NSView alloc] initWithFrame:circleFrame];
-        [circleView setWantsLayer:YES];
-        circleView.layer.cornerRadius = 10;
+        GSStepBulletView *circleView = [[GSStepBulletView alloc] initWithFrame:NSMakeRect(0, -1, 20, 20)];
+        [circleView setState:(i == _currentStepIndex ? 1 : 0)];
         
         // Create step label
         NSRect labelFrame = NSMakeRect(30, 0, stepFrame.size.width - 35, 24);
@@ -201,23 +193,21 @@ NSView *createColoredBox(NSRect frame, NSColor *color) {
 - (void)updateStepIndicators {
     for (NSInteger i = 0; i < _stepIndicatorViews.count; i++) {
         NSView *stepView = _stepIndicatorViews[i];
-        NSView *circleView = [[stepView subviews] objectAtIndex:0];
+        GSStepBulletView *circleView = [[stepView subviews] objectAtIndex:0];
         NSTextField *labelField = [[stepView subviews] objectAtIndex:1];
-        
+
         if (i < _currentStepIndex) {
-            // Completed step - blue circle with checkmark
-            circleView.layer.backgroundColor = [[NSColor colorWithCalibratedRed:0.0 green:0.478 blue:1.0 alpha:1.0] CGColor];
+            // Completed step - blue orb
+            [circleView setState:2];
             [labelField setTextColor:[NSColor blackColor]];
         } else if (i == _currentStepIndex) {
-            // Current step - blue circle
-            circleView.layer.backgroundColor = [[NSColor colorWithCalibratedRed:0.0 green:0.478 blue:1.0 alpha:1.0] CGColor];
+            // Current step - blue orb
+            [circleView setState:1];
             [labelField setTextColor:[NSColor blackColor]];
             [labelField setFont:[NSFont boldSystemFontOfSize:13]];
         } else {
-            // Future step - gray outline
-            circleView.layer.backgroundColor = [[NSColor clearColor] CGColor];
-            circleView.layer.borderWidth = 1.0;
-            circleView.layer.borderColor = [[NSColor colorWithCalibratedRed:0.4 green:0.4 blue:0.4 alpha:1.0] CGColor];
+            // Future step - dim orb
+            [circleView setState:0];
             [labelField setTextColor:[NSColor colorWithCalibratedRed:0.4 green:0.4 blue:0.4 alpha:1.0]];
             [labelField setFont:[NSFont systemFontOfSize:13]];
         }

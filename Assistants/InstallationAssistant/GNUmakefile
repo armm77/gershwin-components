@@ -19,7 +19,7 @@ InstallationAssistant_RESOURCE_FILES = \
 InstallationAssistant_GUI_LIBS += -lgnustep-gui -lgnustep-base
 
 # Compiler and linker flags - embed framework in bundle
-InstallationAssistant_CPPFLAGS += -Wall -Wextra -Werror -O2 -I$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1/Headers
+InstallationAssistant_CPPFLAGS += -Wall -Wextra -Werror -Wno-unused-parameter -O2 -I$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1/Headers
 InstallationAssistant_LDFLAGS += -L$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1 -lGSAssistantFramework -Wl,-rpath,'$$ORIGIN/Frameworks/GSAssistantFramework.framework/Versions/1' -ldispatch
 
 include $(GNUSTEP_MAKEFILES)/application.make

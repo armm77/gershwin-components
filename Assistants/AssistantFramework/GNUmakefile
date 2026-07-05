@@ -12,7 +12,8 @@ GSAssistantFramework_OBJC_FILES = \
 	GSNetworkUtilities.m \
 	GSDiskUtilities.m \
 	GSSelectionStep.m \
-	GSEnhancedProgressStep.m
+	GSEnhancedProgressStep.m \
+	GSStepBulletView.m
 
 # Header files to install
 GSAssistantFramework_HEADER_FILES = \
@@ -21,7 +22,8 @@ GSAssistantFramework_HEADER_FILES = \
 	GSNetworkUtilities.h \
 	GSDiskUtilities.h \
 	GSSelectionStep.h \
-	GSEnhancedProgressStep.h
+	GSEnhancedProgressStep.h \
+	GSStepBulletView.h
 
 # Headers that should be included in the framework headers
 GSAssistantFramework_HEADER_FILES_INSTALL_DIR = /GSAssistantFramework
@@ -35,7 +37,7 @@ GSAssistantFramework_RESOURCE_FILES = \
 GSAssistantFramework_FRAMEWORKS_DEPEND_UPON = AppKit Foundation
 
 # Compiler and linker flags
-GSAssistantFramework_CPPFLAGS += -Wall -Wextra -fobjc-arc -Werror -O2
+GSAssistantFramework_CPPFLAGS += -Wall -Wextra -fobjc-arc -Werror -Wno-unused-parameter -O2
 GSAssistantFramework_LDFLAGS += -ldispatch
 
 # Installation directory

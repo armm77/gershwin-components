@@ -244,3 +244,4 @@ NS_ASSUME_NONNULL_END
 #import "GSDiskUtilities.h"
 #import "GSSelectionStep.h"
 #import "GSEnhancedProgressStep.h"
+#import "GSStepBulletView.h"
