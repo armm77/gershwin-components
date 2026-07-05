@@ -162,7 +162,8 @@ static ConsoleController *sharedInstance = nil;
     }
     
     NSMutableDictionary *newEnv = [NSMutableDictionary dictionaryWithDictionary:env];
-    [newEnv setObject:@"1" forKey:@"CONSOLE_ELEVATED"]; 
+    [newEnv setObject:@"1" forKey:@"CONSOLE_ELEVATED"];
+    [newEnv setObject:NSHomeDirectory() forKey:@"CONSOLE_ORIGINAL_HOME"];
     
     NSTask *task = [[NSTask alloc] init];
     [task setLaunchPath:sudoPath];
@@ -467,7 +468,7 @@ static ConsoleController *sharedInstance = nil;
     
     // Application logs
     NSArray *appLogDirs = @[
-        [@"~/Library/Logs" stringByExpandingTildeInPath],
+        [self userLogsDirectory],
         @"/var/log",
         @"/tmp"
     ];
@@ -643,9 +644,8 @@ static ConsoleController *sharedInstance = nil;
     NSMutableArray *files = [NSMutableArray array];
     NSFileManager *fm = [NSFileManager defaultManager];
     
-    // Directories to scan for log files
+    // Directories to scan for system log files
     NSArray *logDirs = @[
-        [@"~/Library/Logs" stringByExpandingTildeInPath],
         @"/var/log",
         @"/tmp"
     ];
@@ -661,6 +661,37 @@ static ConsoleController *sharedInstance = nil;
                 if ([ext isEqualToString:@"log"] || [ext isEqualToString:@"txt"]) {
                     [files addObject:path];
                 }
+            }
+        }
+    }
+    
+    [files sortUsingComparator:^NSComparisonResult(id a, id b) {
+        return [[(NSString *)a lastPathComponent] compare:[(NSString *)b lastPathComponent] options:NSCaseInsensitiveSearch];
+    }];
+    return files;
+}
+
+- (NSString *)userLogsDirectory
+{
+    NSString *home = [[[NSProcessInfo processInfo] environment] objectForKey:@"CONSOLE_ORIGINAL_HOME"];
+    if (!home) home = NSHomeDirectory();
+    return [home stringByAppendingPathComponent:@"Library/Logs"];
+}
+
+- (NSArray *)userLogFilesList
+{
+    NSMutableArray *files = [NSMutableArray array];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *logDir = [self userLogsDirectory];
+    
+    NSArray *entries = [fm contentsOfDirectoryAtPath:logDir error:nil];
+    for (NSString *name in entries) {
+        NSString *path = [logDir stringByAppendingPathComponent:name];
+        BOOL isDir = NO;
+        if ([fm fileExistsAtPath:path isDirectory:&isDir] && !isDir && [fm isReadableFileAtPath:path]) {
+            NSString *ext = [[name pathExtension] lowercaseString];
+            if ([ext isEqualToString:@"log"] || [ext isEqualToString:@"txt"]) {
+                [files addObject:path];
             }
         }
     }
@@ -852,7 +883,7 @@ static ConsoleController *sharedInstance = nil;
 - (NSInteger)outlineView:(NSOutlineView *)outlineView numberOfChildrenOfItem:(id)item
 {
     if (item == nil) {
-        return 2;  // "System Log Queries" and "Log Files"
+        return 3;  // "System Log Queries", "Log Files", "User Logs"
     }
     
     if ([item isKindOfClass:[NSString class]]) {
@@ -861,6 +892,8 @@ static ConsoleController *sharedInstance = nil;
             return [_queries count];
         } else if ([category isEqualToString:@"Log Files"]) {
             return [[self logFilesList] count];
+        } else if ([category isEqualToString:@"User Logs"]) {
+            return [[self userLogFilesList] count];
         }
     }
     
@@ -870,7 +903,10 @@ static ConsoleController *sharedInstance = nil;
 - (id)outlineView:(NSOutlineView *)outlineView child:(NSInteger)index ofItem:(id)item
 {
     if (item == nil) {
-        return index == 0 ? @"System Log Queries" : @"Log Files";
+        if (index == 0) return @"System Log Queries";
+        if (index == 1) return @"Log Files";
+        if (index == 2) return @"User Logs";
+        return nil;
     }
     
     if ([item isKindOfClass:[NSString class]]) {
@@ -879,6 +915,8 @@ static ConsoleController *sharedInstance = nil;
             return [_queries objectAtIndex:index];
         } else if ([category isEqualToString:@"Log Files"]) {
             return [[self logFilesList] objectAtIndex:index];
+        } else if ([category isEqualToString:@"User Logs"]) {
+            return [[self userLogFilesList] objectAtIndex:index];
         }
     }
     
@@ -891,7 +929,7 @@ static ConsoleController *sharedInstance = nil;
         return NO;
     }
     NSString *str = (NSString *)item;
-    if ([str isEqualToString:@"System Log Queries"] || [str isEqualToString:@"Log Files"]) {
+    if ([str isEqualToString:@"System Log Queries"] || [str isEqualToString:@"Log Files"] || [str isEqualToString:@"User Logs"]) {
         return YES;
     }
     return NO;
@@ -972,6 +1010,10 @@ static ConsoleController *sharedInstance = nil;
             NSString *str = (NSString *)item;
             if ([str isEqualToString:@"Log Files"]) {
                 [self setCurrentSourcePrefix:nil];
+                [self setCurrentQuery:nil];
+                [self setCurrentSourceName:nil];
+            } else if ([str isEqualToString:@"User Logs"]) {
+                [self setCurrentSourcePrefix:[self userLogsDirectory]];
                 [self setCurrentQuery:nil];
                 [self setCurrentSourceName:nil];
             } else if ([str isEqualToString:@"System Log Queries"]) {
