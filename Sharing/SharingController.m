@@ -44,6 +44,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         smbEnabled = NO;
         webEnabled = NO;
         mediaEnabled = NO;
+        rdpEnabled = NO;
         currentHostname = nil;
         
         // Find helper path
@@ -99,6 +100,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     [smbCheckbox release];
     [webCheckbox release];
     [mediaCheckbox release];
+    [rdpCheckbox release];
     [sshStatusLabel release];
     [vncStatusLabel release];
     [sftpStatusLabel release];
@@ -106,6 +108,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     [smbStatusLabel release];
     [webStatusLabel release];
     [mediaStatusLabel release];
+    [rdpStatusLabel release];
     [sshInfoLabel release];
     [vncInfoLabel release];
     [sftpInfoLabel release];
@@ -113,6 +116,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     [smbInfoLabel release];
     [webInfoLabel release];
     [mediaInfoLabel release];
+    [rdpInfoLabel release];
     [mdnsStatusLabel release];
     [currentHostname release];
     [helperPath release];
@@ -371,6 +375,26 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (BOOL)getMediaInstalled
 {
     NSString *output = [self runHelper:@"media-installed"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"installed"];
+    }
+    return YES;
+}
+
+- (BOOL)getRDPStatus
+{
+    NSString *output = [self runHelper:@"rdp-status"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"running"];
+    }
+    return NO;
+}
+
+- (BOOL)getRDPInstalled
+{
+    NSString *output = [self runHelper:@"rdp-installed"];
     if (output) {
         NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         return [trimmed isEqualToString:@"installed"];
@@ -733,6 +757,57 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     }
 }
 
+- (void)toggleRDP:(id)sender
+{
+    BOOL shouldEnable = [rdpCheckbox state] == NSOnState;
+    NSString *command = shouldEnable ? @"rdp-start" : @"rdp-stop";
+
+    NSDebugLog(@"SharingController: %@ Remote Desktop", shouldEnable ? @"Starting" : @"Stopping");
+
+    BOOL success = [self runHelperWithSudo:command];
+
+    if (success) {
+        rdpEnabled = shouldEnable;
+
+        if (shouldEnable) {
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable]) {
+                BOOL announced = [mgr announceService:GSServiceTypeRDP
+                                                                     port:3389
+                                                                txtRecord:nil];
+                if (announced) {
+                    NSDebugLog(@"SharingController: Remote Desktop service announced via mDNS");
+                } else {
+                    NSDebugLog(@"SharingController: Failed to announce Remote Desktop service via mDNS");
+                    NSRunAlertPanel(@"Remote Desktop Warning",
+                                   @"Remote Desktop started but could not be announced on the network.",
+                                   @"OK", nil, nil);
+                }
+            }
+        } else {
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable]) {
+                [mgr unannounceService:GSServiceTypeRDP];
+                NSDebugLog(@"SharingController: Remote Desktop service unannounced from mDNS");
+            }
+        }
+
+        [self refreshStatus:nil];
+        NSDebugLog(@"SharingController: Remote Desktop %@", shouldEnable ? @"started" : @"stopped");
+    } else {
+        [rdpCheckbox setState:rdpEnabled ? NSOnState : NSOffState];
+        NSRunAlertPanel(@"Remote Desktop Error",
+                       @"Failed to modify Remote Desktop service.\n\n"
+                       @"Remote Desktop requires xrdp to be installed.\n"
+                       @"Please install xrdp using your system's package manager:\n"
+                       @"• Debian/Ubuntu: sudo apt-get install xrdp\n"
+                       @"• Fedora/RHEL: sudo dnf install xrdp\n"
+                       @"• FreeBSD: sudo pkg install xrdp\n"
+                       @"• Arch: sudo pacman -S xrdp",
+                       @"OK", nil, nil);
+    }
+}
+
 - (void)toggleMedia:(id)sender
 {
     BOOL shouldEnable = [mediaCheckbox state] == NSOnState;
@@ -862,6 +937,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         BOOL smb  = [self getSMBStatus];
         BOOL web  = [self getWebStatus];
         BOOL media  = [self getMediaStatus];
+        BOOL rdp  = [self getRDPStatus];
         // Also query installation state for each service
         BOOL isSshInstalled  = [self getSSHInstalled];
         BOOL isVncInstalled  = [self getVNCInstalled];
@@ -870,24 +946,25 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         BOOL isSmbInstalled  = [self getSMBInstalled];
         BOOL isWebInstalled  = [self getWebInstalled];
         BOOL isMediaInstalled  = [self getMediaInstalled];
+        BOOL isRdpInstalled  = [self getRDPInstalled];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             isRefreshingStatus = NO;
             [self updateUIWithHostname:hostname
-                                   ssh:ssh vnc:vnc sftp:sftp afp:afp smb:smb web:web media:media
+                                   ssh:ssh vnc:vnc sftp:sftp afp:afp smb:smb web:web media:media rdp:rdp
                           sshInstalled:isSshInstalled vncInstalled:isVncInstalled
                          sftpInstalled:isSftpInstalled afpInstalled:isAfpInstalled
-                          smbInstalled:isSmbInstalled webInstalled:isWebInstalled mediaInstalled:isMediaInstalled];
+                          smbInstalled:isSmbInstalled webInstalled:isWebInstalled mediaInstalled:isMediaInstalled rdpInstalled:isRdpInstalled];
         });
     });
 }
 
 - (void)updateUIWithHostname:(NSString *)hostname
                           ssh:(BOOL)ssh vnc:(BOOL)vnc sftp:(BOOL)sftp
-                          afp:(BOOL)afp smb:(BOOL)smb web:(BOOL)web media:(BOOL)media
+                          afp:(BOOL)afp smb:(BOOL)smb web:(BOOL)web media:(BOOL)media rdp:(BOOL)rdp
                  sshInstalled:(BOOL)isSshInstalled vncInstalled:(BOOL)isVncInstalled
                 sftpInstalled:(BOOL)isSftpInstalled afpInstalled:(BOOL)isAfpInstalled
-                 smbInstalled:(BOOL)isSmbInstalled webInstalled:(BOOL)isWebInstalled mediaInstalled:(BOOL)isMediaInstalled
+                 smbInstalled:(BOOL)isSmbInstalled webInstalled:(BOOL)isWebInstalled mediaInstalled:(BOOL)isMediaInstalled rdpInstalled:(BOOL)isRdpInstalled
 {
     // Safety check in case the pane was unselected while we were querying
     if (!hostnameField || !sshCheckbox) {
@@ -1235,6 +1312,49 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
             }
         }
     }
+
+    // --- Remote Desktop ---
+    if (!isRdpInstalled) {
+        [rdpCheckbox setEnabled:NO];
+        [rdpCheckbox setState:NSOffState];
+        [rdpStatusLabel setStringValue:@"N/A"];
+        [rdpStatusLabel setTextColor:naColor];
+        [rdpInfoLabel setStringValue:@"Install xrdp to enable Remote Desktop."];
+        [rdpInfoLabel setHidden:NO];
+    } else {
+        [rdpCheckbox setEnabled:YES];
+        rdpEnabled = rdp;
+        [rdpCheckbox setState:rdpEnabled ? NSOnState : NSOffState];
+
+        if (rdpEnabled) {
+            [rdpStatusLabel setStringValue:@"On"];
+            [rdpStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
+
+            NSString *info = [NSString stringWithFormat:@"Remote Desktop available at: %@:3389", serviceAddress];
+            [rdpInfoLabel setStringValue:info];
+            [rdpInfoLabel setHidden:NO];
+
+            // Ensure mDNS announcement is active
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                ![mgr isServiceAnnounced:GSServiceTypeRDP]) {
+                [mgr announceService:GSServiceTypeRDP port:3389 txtRecord:nil];
+                NSDebugLog(@"SharingController: Re-announced Remote Desktop service via mDNS");
+            }
+        } else {
+            [rdpStatusLabel setStringValue:@"Off"];
+            [rdpStatusLabel setTextColor:[NSColor grayColor]];
+            [rdpInfoLabel setHidden:YES];
+
+            // Ensure mDNS announcement is stopped
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                [mgr isServiceAnnounced:GSServiceTypeRDP]) {
+                [mgr unannounceService:GSServiceTypeRDP];
+                NSDebugLog(@"SharingController: Unannounced Remote Desktop service from mDNS");
+            }
+        }
+    }
 }
 
 #pragma mark - UI Creation
@@ -1249,7 +1369,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     // - 8px between control and its label
     // - 20px between control groups
     
-    CGFloat viewHeight = 476;
+    CGFloat viewHeight = 519;
     NSView *mainView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 595, viewHeight)];
     [mainView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
@@ -1557,6 +1677,38 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     [mediaInfoLabel setTextColor:[NSColor darkGrayColor]];
     [mediaInfoLabel setHidden:YES];
     [mainView addSubview:mediaInfoLabel];
+
+    yPos -= serviceRowHeight;  // Move to next service row
+
+    // Remote Desktop (xrdp) Service
+    rdpCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(leftMargin, yPos - METRICS_RADIO_BUTTON_SIZE, 230, METRICS_RADIO_BUTTON_SIZE)];
+    [rdpCheckbox setTitle:@"Remote Desktop (xrdp)"];
+    [rdpCheckbox setButtonType:NSSwitchButton];
+    [rdpCheckbox setTarget:self];
+    [rdpCheckbox setAction:@selector(toggleRDP:)];
+    [rdpCheckbox setFont:[NSFont systemFontOfSize:13]];
+    [mainView addSubview:rdpCheckbox];
+
+    rdpStatusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(leftMargin + 230 + METRICS_SPACE_8, yPos - 17, 60, 17)];
+    [rdpStatusLabel setStringValue:@"Off"];
+    [rdpStatusLabel setBezeled:NO];
+    [rdpStatusLabel setDrawsBackground:NO];
+    [rdpStatusLabel setEditable:NO];
+    [rdpStatusLabel setSelectable:NO];
+    [rdpStatusLabel setFont:[NSFont boldSystemFontOfSize:13]];
+    [rdpStatusLabel setTextColor:[NSColor grayColor]];
+    [mainView addSubview:rdpStatusLabel];
+
+    rdpInfoLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(leftMargin + METRICS_SPACE_16, yPos - METRICS_RADIO_BUTTON_SIZE - 17, width - METRICS_SPACE_16, 17)];
+    [rdpInfoLabel setStringValue:@""];
+    [rdpInfoLabel setBezeled:NO];
+    [rdpInfoLabel setDrawsBackground:NO];
+    [rdpInfoLabel setEditable:NO];
+    [rdpInfoLabel setSelectable:YES];
+    [rdpInfoLabel setFont:[NSFont systemFontOfSize:11]];
+    [rdpInfoLabel setTextColor:[NSColor darkGrayColor]];
+    [rdpInfoLabel setHidden:YES];
+    [mainView addSubview:rdpInfoLabel];
 
     yPos -= 17 + METRICS_SPACE_20;  // 20px gap between control groups
     

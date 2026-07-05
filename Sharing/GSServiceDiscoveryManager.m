@@ -216,6 +216,8 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
             return @"_http._tcp.";
         case GSServiceTypeMedia:
             return @"_dlna._tcp.";
+        case GSServiceTypeRDP:
+            return @"_rdp._tcp.";
         default:
             return nil;
     }
@@ -239,6 +241,8 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
             return 80;
         case GSServiceTypeMedia:
             return 8200;
+        case GSServiceTypeRDP:
+            return 3389;
         default:
             return 0;
     }

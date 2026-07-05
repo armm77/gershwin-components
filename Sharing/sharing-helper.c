@@ -1207,6 +1207,116 @@ static void cmd_media_stop(void)
     exit(0);
 }
 
+/* Remote Desktop (xrdp) status */
+static void cmd_rdp_status(void)
+{
+#ifdef PLATFORM_LINUX
+    if (check_service_running("xrdp.service") ||
+        check_service_running("xrdp") ||
+        (system("pgrep -x xrdp >/dev/null 2>&1") == 0)) {
+        printf("running\n");
+    } else {
+        printf("stopped\n");
+    }
+#else
+    if (check_service_running("xrdp") ||
+        (system("pgrep -x xrdp >/dev/null 2>&1") == 0)) {
+        printf("running\n");
+    } else {
+        printf("stopped\n");
+    }
+#endif
+    exit(0);
+}
+
+/* Remote Desktop installed */
+static void cmd_rdp_installed(void)
+{
+    if (binary_exists("xrdp")) {
+        printf("installed\n");
+    } else {
+        printf("not-installed\n");
+    }
+    exit(0);
+}
+
+/* Start xrdp */
+static void cmd_rdp_start(void)
+{
+    syslog(LOG_INFO, "sharing-helper: Starting xrdp");
+
+    if (!binary_exists("xrdp")) {
+        fprintf(stderr, "xrdp is not installed\n");
+        syslog(LOG_ERR, "sharing-helper: xrdp not found");
+        exit(1);
+    }
+
+#ifdef PLATFORM_LINUX
+    if (system("which systemctl >/dev/null 2>&1") == 0) {
+        if (system("systemctl start xrdp.service >/dev/null 2>&1") == 0) {
+            system("systemctl enable xrdp.service >/dev/null 2>&1");
+            goto rdp_started;
+        }
+    }
+    if (system("service xrdp start >/dev/null 2>&1") == 0) {
+        goto rdp_started;
+    }
+    if (system("test -x /etc/init.d/xrdp && /etc/init.d/xrdp start >/dev/null 2>&1") == 0) {
+        goto rdp_started;
+    }
+    if (system("xrdp >/dev/null 2>&1 &") == 0) {
+        goto rdp_started;
+    }
+    fprintf(stderr, "Failed to start xrdp\n");
+    syslog(LOG_ERR, "sharing-helper: Failed to start xrdp");
+    exit(1);
+#elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD)
+    system("sysrc xrdp_enable=YES");
+    if (system("service xrdp start") == 0) {
+        goto rdp_started;
+    }
+    fprintf(stderr, "Failed to start xrdp\n");
+    syslog(LOG_ERR, "sharing-helper: Failed to start xrdp");
+    exit(1);
+#elif defined(PLATFORM_OPENBSD)
+    system("rcctl enable xrdp");
+    if (system("rcctl start xrdp") == 0) {
+        goto rdp_started;
+    }
+    fprintf(stderr, "Failed to start xrdp\n");
+    syslog(LOG_ERR, "sharing-helper: Failed to start xrdp");
+    exit(1);
+#endif
+
+rdp_started:
+    syslog(LOG_INFO, "sharing-helper: xrdp started");
+    exit(0);
+}
+
+/* Stop xrdp */
+static void cmd_rdp_stop(void)
+{
+    syslog(LOG_INFO, "sharing-helper: Stopping xrdp");
+
+#ifdef PLATFORM_LINUX
+    if (system("which systemctl >/dev/null 2>&1") == 0) {
+        system("systemctl stop xrdp.service >/dev/null 2>&1");
+    }
+    system("service xrdp stop >/dev/null 2>&1");
+    system("test -x /etc/init.d/xrdp && /etc/init.d/xrdp stop >/dev/null 2>&1");
+    system("pkill -x xrdp >/dev/null 2>&1");
+#elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD)
+    system("service xrdp stop");
+    system("pkill -x xrdp >/dev/null 2>&1");
+#elif defined(PLATFORM_OPENBSD)
+    system("rcctl stop xrdp");
+    system("pkill -x xrdp >/dev/null 2>&1");
+#endif
+
+    syslog(LOG_INFO, "sharing-helper: xrdp stopped");
+    exit(0);
+}
+
 /* Usage */
 static void usage(const char *progname)
 {
@@ -1242,6 +1352,10 @@ static void usage(const char *progname)
     fprintf(stderr, "  media-installed       Check if MiniDLNA is installed\n");
     fprintf(stderr, "  media-start           Start Media Sharing (MiniDLNA)\n");
     fprintf(stderr, "  media-stop            Stop Media Sharing (MiniDLNA)\n");
+    fprintf(stderr, "  rdp-status            Check Remote Desktop (xrdp) status\n");
+    fprintf(stderr, "  rdp-installed         Check if xrdp is installed\n");
+    fprintf(stderr, "  rdp-start             Start Remote Desktop (xrdp)\n");
+    fprintf(stderr, "  rdp-stop              Stop Remote Desktop (xrdp)\n");
     exit(1);
 }
 
@@ -1286,6 +1400,10 @@ int main(int argc, char *argv[])
         cmd_media_status();
     } else if (strcmp(cmd, "media-installed") == 0) {
         cmd_media_installed();
+    } else if (strcmp(cmd, "rdp-status") == 0) {
+        cmd_rdp_status();
+    } else if (strcmp(cmd, "rdp-installed") == 0) {
+        cmd_rdp_installed();
     }
     
     /* Commands that require root */
@@ -1330,6 +1448,10 @@ int main(int argc, char *argv[])
         cmd_media_start();
     } else if (strcmp(cmd, "media-stop") == 0) {
         cmd_media_stop();
+    } else if (strcmp(cmd, "rdp-start") == 0) {
+        cmd_rdp_start();
+    } else if (strcmp(cmd, "rdp-stop") == 0) {
+        cmd_rdp_stop();
     } else {
         fprintf(stderr, "Error: Unknown command: %s\n", cmd);
         usage(argv[0]);

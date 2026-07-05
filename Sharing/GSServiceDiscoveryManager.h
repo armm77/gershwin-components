@@ -29,7 +29,8 @@ typedef enum {
     GSServiceTypeSMB,
     GSServiceTypeWebDAV,
     GSServiceTypeWeb,
-    GSServiceTypeMedia
+    GSServiceTypeMedia,
+    GSServiceTypeRDP
 } GSServiceType;
 
 /**
