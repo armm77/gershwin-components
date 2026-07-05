@@ -5,6 +5,7 @@
  */
 
 #import "LoginWindow.h"
+#import "KeyboardManager.h"
 #import <pwd.h>
 #import <unistd.h>
 #import <sys/wait.h>
@@ -242,6 +243,12 @@ void signalHandler(int sig) {
     if (![self isXServerRunning]) {
         NSDebugLLog(@"gwcomp", @"[WARNING] X server is not running even after main() startup attempt");
     }
+    
+    // Detect and apply keyboard layout immediately so LoginWindow and
+    // the subsequent user session use the correct layout.
+    KeyboardManager *kbMgr = [[KeyboardManager alloc] init];
+    [kbMgr setupWithPasswd:NULL];
+    [kbMgr release];
     
     [self createLoginWindow];
     
@@ -967,6 +974,11 @@ void signalHandler(int sig) {
             close(fd);
         }
         
+        // Detect and persist keyboard config while we are still root
+        KeyboardManager *kbMgr = [[KeyboardManager alloc] init];
+        [kbMgr detectKeyboardWithPasswd:pwd];
+        [kbMgr persistConfiguration];
+        
         NSDebugLLog(@"gwcomp", @"[DEBUG] About to set user context for user: %s (uid=%d, gid=%d)", pwd->pw_name, pwd->pw_uid, pwd->pw_gid);
         
         // Use manual setup for better error reporting
@@ -1092,140 +1104,10 @@ void signalHandler(int sig) {
             NSDebugLLog(@"gwcomp", @"[DEBUG] No PAM environment variables to set");
         }
         
-        // Set up keyboard layout before starting session
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Setting up keyboard layout");
-        
-        // First, try to read keyboard layout from login.conf or environment
-        const char *kb_layout = NULL;
-        const char *kb_variant = NULL;
-        const char *kb_options = NULL;
-        
-#if defined(__linux__)
-        // Linux: Skip login_cap, use environment variables only
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Skipping BSD login_cap keyboard config on Linux");
-#else
-        // Get login capabilities for this user in child process
-        login_cap_t *child_lc = GW_LOGIN_GETPWCLASS(pwd);
-        if (child_lc != NULL) {
-            kb_layout = login_getcapstr(child_lc, "keyboard.layout", NULL, NULL);
-            kb_variant = login_getcapstr(child_lc, "keyboard.variant", NULL, NULL);
-            kb_options = login_getcapstr(child_lc, "keyboard.options", NULL, NULL);
-            NSDebugLLog(@"gwcomp", @"[DEBUG] Checked login.conf for keyboard settings");
-        }
-#endif
-        
-        // If no keyboard layout specified in login.conf, check environment
-        if (!kb_layout) {
-            kb_layout = getenv("XKB_DEFAULT_LAYOUT");
-        }
-        if (!kb_variant) {
-            kb_variant = getenv("XKB_DEFAULT_VARIANT");
-        }
-        if (!kb_options) {
-            kb_options = getenv("XKB_DEFAULT_OPTIONS");
-        }
-        
-        // Check various system configuration files for keyboard layout
-        if (!kb_layout) {
-            NSDebugLLog(@"gwcomp", @"[DEBUG] No keyboard layout from login.conf or environment, checking /etc/rc.conf");
-            // Check /etc/rc.conf for keyboard layout
-            FILE *rc_conf = fopen("/etc/rc.conf", "r");
-            if (rc_conf) {
-                char line[256];
-                while (fgets(line, sizeof(line), rc_conf)) {
-                    if (strncmp(line, "keymap=", 7) == 0) {
-                        char *keymap = strchr(line, '=') + 1;
-                        char *newline = strchr(keymap, '\n');
-                        if (newline) *newline = '\0';
-                        // Remove quotes if present
-                        if (keymap[0] == '"') {
-                            keymap++;
-                            char *end_quote = strchr(keymap, '"');
-                            if (end_quote) *end_quote = '\0';
-                        }
-                        NSDebugLLog(@"gwcomp", @"[DEBUG] Found raw keymap in /etc/rc.conf: %s", keymap);
-                        // Convert console keymap to X11 layout (simplified mapping)
-                        if (strstr(keymap, "us")) kb_layout = "us";
-                        else if (strstr(keymap, "de")) kb_layout = "de";
-                        else if (strstr(keymap, "fr")) kb_layout = "fr";
-                        else if (strstr(keymap, "es")) kb_layout = "es";
-                        else if (strstr(keymap, "it")) kb_layout = "it";
-                        else if (strstr(keymap, "pt")) kb_layout = "pt";
-                        else if (strstr(keymap, "ru")) kb_layout = "ru";
-                        else if (strstr(keymap, "uk") || strstr(keymap, "gb")) kb_layout = "gb";
-                        else if (strstr(keymap, "dvorak")) {
-                            kb_layout = "us";
-                            kb_variant = "dvorak";
-                        }
-                        else {
-                            kb_layout = "us"; // fallback
-                            NSDebugLLog(@"gwcomp", @"[DEBUG] Unknown keymap '%s', using fallback 'us'", keymap);
-                        }
-                        NSDebugLLog(@"gwcomp", @"[DEBUG] Converted console keymap '%s' to X11 layout '%s'", keymap, kb_layout);
-                        if (kb_variant) NSDebugLLog(@"gwcomp", @"[DEBUG] Set variant to '%s'", kb_variant);
-                        break;
-                    }
-                }
-                fclose(rc_conf);
-            } else {
-                NSDebugLLog(@"gwcomp", @"[DEBUG] Could not open /etc/rc.conf");
-            }
-        }
-        
-#if !defined(__linux__)
-        // Close login capabilities if we opened them
-        if (child_lc != NULL) {
-            login_close(child_lc);
-        }
-#endif
-        
-        // Default to US layout if nothing found
-        if (!kb_layout) {
-            kb_layout = "us";
-            NSDebugLLog(@"gwcomp", @"[DEBUG] No keyboard layout found, defaulting to US");
-        }
-        
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Final keyboard layout: %s", kb_layout ? kb_layout : "none");
-        if (kb_variant) NSDebugLLog(@"gwcomp", @"[DEBUG] Final keyboard variant: %s", kb_variant);
-        if (kb_options) NSDebugLLog(@"gwcomp", @"[DEBUG] Final keyboard options: %s", kb_options);
-        
-        // Clear existing keyboard options first
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Clearing existing keyboard options");
-        system("/usr/local/bin/setxkbmap -option '' 2>/dev/null || true");
-        
-        // Build setxkbmap command
-        char xkb_cmd[512] = "/usr/local/bin/setxkbmap";
-        
-        if (kb_layout && strlen(kb_layout) > 0) {
-            strcat(xkb_cmd, " ");
-            strcat(xkb_cmd, kb_layout);
-        }
-        
-        if (kb_variant && strlen(kb_variant) > 0) {
-            strcat(xkb_cmd, " -variant ");
-            strcat(xkb_cmd, kb_variant);
-        }
-        
-        if (kb_options && strlen(kb_options) > 0) {
-            strcat(xkb_cmd, " -option ");
-            strcat(xkb_cmd, kb_options);
-        }
-        
-        strcat(xkb_cmd, " 2>/dev/null");
-        
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Executing keyboard setup command: %s", xkb_cmd);
-        int kb_result = system(xkb_cmd);
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Keyboard setup command result: %d", kb_result);
-        
-        // Verify the keyboard layout was set correctly
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Verifying keyboard layout after setup");
-        system("/usr/local/bin/setxkbmap -query | head -10");
-        
-        // Also try to force refresh X11 keyboard state
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Refreshing X11 keyboard state");
-        system("/usr/local/bin/xkbcomp $DISPLAY - 2>/dev/null < /dev/null || true");
-        
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Keyboard layout setup complete");
+        // Apply keyboard layout to X server (as user, DISPLAY is set above)
+        NSDebugLLog(@"gwcomp", @"[DEBUG] Applying keyboard layout to X server");
+        [kbMgr applyToXServer];
+        [kbMgr release];
         
         // Change to user's home directory
         if (chdir(pwd->pw_dir) != 0) {
@@ -1532,6 +1414,11 @@ void signalHandler(int sig) {
             close(fd);
         }
         
+        // Detect and persist keyboard config while we are still root
+        KeyboardManager *kbMgr = [[KeyboardManager alloc] init];
+        [kbMgr detectKeyboardWithPasswd:pwd];
+        [kbMgr persistConfiguration];
+        
         NSDebugLLog(@"gwcomp", @"[DEBUG] About to set user context for auto-login user: %s (uid=%d, gid=%d)", pwd->pw_name, pwd->pw_uid, pwd->pw_gid);
         
         // Use manual setup for better error reporting
@@ -1673,140 +1560,10 @@ void signalHandler(int sig) {
             NSDebugLLog(@"gwcomp", @"[DEBUG] No PAM environment variables to set for auto-login");
         }
         
-        // Set up keyboard layout before starting session (reuse existing keyboard setup)
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Setting up keyboard layout for auto-login");
-        
-        // First, try to read keyboard layout from login.conf or environment
-        const char *kb_layout = NULL;
-        const char *kb_variant = NULL;
-        const char *kb_options = NULL;
-        
-#if defined(__linux__)
-        // Linux: Skip login_cap, use environment variables only
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Skipping BSD login_cap keyboard config for auto-login on Linux");
-#else
-        // Get login capabilities for this user in child process
-        login_cap_t *child_lc = GW_LOGIN_GETPWCLASS(pwd);
-        if (child_lc != NULL) {
-            kb_layout = login_getcapstr(child_lc, "keyboard.layout", NULL, NULL);
-            kb_variant = login_getcapstr(child_lc, "keyboard.variant", NULL, NULL);
-            kb_options = login_getcapstr(child_lc, "keyboard.options", NULL, NULL);
-            NSDebugLLog(@"gwcomp", @"[DEBUG] Checked login.conf for keyboard settings");
-        }
-#endif
-        
-        // If no keyboard layout specified in login.conf, check environment
-        if (!kb_layout) {
-            kb_layout = getenv("XKB_DEFAULT_LAYOUT");
-        }
-        if (!kb_variant) {
-            kb_variant = getenv("XKB_DEFAULT_VARIANT");
-        }
-        if (!kb_options) {
-            kb_options = getenv("XKB_DEFAULT_OPTIONS");
-        }
-        
-        // Check various system configuration files for keyboard layout
-        if (!kb_layout) {
-            NSDebugLLog(@"gwcomp", @"[DEBUG] No keyboard layout from login.conf or environment, checking /etc/rc.conf");
-            // Check /etc/rc.conf for keyboard layout
-            FILE *rc_conf = fopen("/etc/rc.conf", "r");
-            if (rc_conf) {
-                char line[256];
-                while (fgets(line, sizeof(line), rc_conf)) {
-                    if (strncmp(line, "keymap=", 7) == 0) {
-                        char *keymap = strchr(line, '=') + 1;
-                        char *newline = strchr(keymap, '\n');
-                        if (newline) *newline = '\0';
-                        // Remove quotes if present
-                        if (keymap[0] == '"') {
-                            keymap++;
-                            char *end_quote = strchr(keymap, '"');
-                            if (end_quote) *end_quote = '\0';
-                        }
-                        NSDebugLLog(@"gwcomp", @"[DEBUG] Found raw keymap in /etc/rc.conf: %s", keymap);
-                        // Convert console keymap to X11 layout (simplified mapping)
-                        if (strstr(keymap, "us")) kb_layout = "us";
-                        else if (strstr(keymap, "de")) kb_layout = "de";
-                        else if (strstr(keymap, "fr")) kb_layout = "fr";
-                        else if (strstr(keymap, "es")) kb_layout = "es";
-                        else if (strstr(keymap, "it")) kb_layout = "it";
-                        else if (strstr(keymap, "pt")) kb_layout = "pt";
-                        else if (strstr(keymap, "ru")) kb_layout = "ru";
-                        else if (strstr(keymap, "uk") || strstr(keymap, "gb")) kb_layout = "gb";
-                        else if (strstr(keymap, "dvorak")) {
-                            kb_layout = "us";
-                            kb_variant = "dvorak";
-                        }
-                        else {
-                            kb_layout = "us"; // fallback
-                            NSDebugLLog(@"gwcomp", @"[DEBUG] Unknown keymap '%s', using fallback 'us'", keymap);
-                        }
-                        NSDebugLLog(@"gwcomp", @"[DEBUG] Converted console keymap '%s' to X11 layout '%s'", keymap, kb_layout);
-                        if (kb_variant) NSDebugLLog(@"gwcomp", @"[DEBUG] Set variant to '%s'", kb_variant);
-                        break;
-                    }
-                }
-                fclose(rc_conf);
-            } else {
-                NSDebugLLog(@"gwcomp", @"[DEBUG] Could not open /etc/rc.conf");
-            }
-        }
-        
-#if !defined(__linux__)
-        // Close login capabilities if we opened them
-        if (child_lc != NULL) {
-            login_close(child_lc);
-        }
-#endif
-        
-        // Default to US layout if nothing found
-        if (!kb_layout) {
-            kb_layout = "us";
-            NSDebugLLog(@"gwcomp", @"[DEBUG] No keyboard layout found, defaulting to US");
-        }
-        
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Final keyboard layout for auto-login: %s", kb_layout ? kb_layout : "none");
-        if (kb_variant) NSDebugLLog(@"gwcomp", @"[DEBUG] Final keyboard variant for auto-login: %s", kb_variant);
-        if (kb_options) NSDebugLLog(@"gwcomp", @"[DEBUG] Final keyboard options for auto-login: %s", kb_options);
-        
-        // Clear existing keyboard options first
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Clearing existing keyboard options for auto-login");
-        system("/usr/local/bin/setxkbmap -option '' 2>/dev/null || true");
-        
-        // Build setxkbmap command
-        char xkb_cmd[512] = "/usr/local/bin/setxkbmap";
-        
-        if (kb_layout && strlen(kb_layout) > 0) {
-            strcat(xkb_cmd, " ");
-            strcat(xkb_cmd, kb_layout);
-        }
-        
-        if (kb_variant && strlen(kb_variant) > 0) {
-            strcat(xkb_cmd, " -variant ");
-            strcat(xkb_cmd, kb_variant);
-        }
-        
-        if (kb_options && strlen(kb_options) > 0) {
-            strcat(xkb_cmd, " -option ");
-            strcat(xkb_cmd, kb_options);
-        }
-        
-        strcat(xkb_cmd, " 2>/dev/null");
-        
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Executing keyboard setup command for auto-login: %s", xkb_cmd);
-        int kb_result = system(xkb_cmd);
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Keyboard setup command result for auto-login: %d", kb_result);
-        
-        // Verify the keyboard layout was set correctly
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Verifying keyboard layout after auto-login setup");
-        system("/usr/local/bin/setxkbmap -query | head -10");
-        
-        // Also try to force refresh X11 keyboard state
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Refreshing X11 keyboard state for auto-login");
-        system("/usr/local/bin/xkbcomp $DISPLAY - 2>/dev/null < /dev/null || true");
-        
-        NSDebugLLog(@"gwcomp", @"[DEBUG] Keyboard layout setup complete for auto-login");
+        // Apply keyboard layout to X server (as user, DISPLAY is set above)
+        NSDebugLLog(@"gwcomp", @"[DEBUG] Applying keyboard layout to X server for auto-login");
+        [kbMgr applyToXServer];
+        [kbMgr release];
         
         // Change to user's home directory
         if (chdir(pwd->pw_dir) != 0) {

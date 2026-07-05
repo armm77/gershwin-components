@@ -9,7 +9,8 @@ VERSION = 1.0
 LoginWindow_OBJC_FILES = \
     LoginWindow_main.m \
     LoginWindow.m \
-    LoginWindowPAM.m
+    LoginWindowPAM.m \
+    KeyboardManager.m
 
 LoginWindow_RESOURCE_FILES = \
     Info.plist
