@@ -1092,6 +1092,121 @@ static void cmd_web_stop(void)
     exit(0);
 }
 
+/* Media Sharing (MiniDLNA/ReadyMedia) status */
+static void cmd_media_status(void)
+{
+    /* Binary may be minidlna or minidlnad depending on distribution */
+    int running = 0;
+    running = (system("pgrep -x minidlna >/dev/null 2>&1") == 0) ||
+              (system("pgrep -x minidlnad >/dev/null 2>&1") == 0);
+#ifdef PLATFORM_LINUX
+    if (!running) {
+        running = check_service_running("minidlna.service") ||
+                  check_service_running("minidlna");
+    }
+#else
+    if (!running) {
+        running = check_service_running("minidlna");
+    }
+#endif
+    if (running) {
+        printf("running\n");
+    } else {
+        printf("stopped\n");
+    }
+    exit(0);
+}
+
+/* Media Sharing installed */
+static void cmd_media_installed(void)
+{
+    if (binary_exists("minidlna") || binary_exists("minidlnad")) {
+        printf("installed\n");
+    } else {
+        printf("not-installed\n");
+    }
+    exit(0);
+}
+
+/* Start MiniDLNA */
+static void cmd_media_start(void)
+{
+    syslog(LOG_INFO, "sharing-helper: Starting MiniDLNA");
+
+    if (!binary_exists("minidlna") && !binary_exists("minidlnad")) {
+        fprintf(stderr, "MiniDLNA is not installed\n");
+        syslog(LOG_ERR, "sharing-helper: MiniDLNA not found");
+        exit(1);
+    }
+
+#ifdef PLATFORM_LINUX
+    if (system("which systemctl >/dev/null 2>&1") == 0) {
+        if (system("systemctl start minidlna.service >/dev/null 2>&1") == 0) {
+            system("systemctl enable minidlna.service >/dev/null 2>&1");
+            goto media_started;
+        }
+    }
+    if (system("service minidlna start >/dev/null 2>&1") == 0) {
+        goto media_started;
+    }
+    if (system("test -x /etc/init.d/minidlna && /etc/init.d/minidlna start >/dev/null 2>&1") == 0) {
+        goto media_started;
+    }
+    /* Try direct invocation — binary may be minidlna or minidlnad */
+    if (system("minidlnad >/dev/null 2>&1 &") == 0 ||
+        system("minidlna >/dev/null 2>&1 &") == 0) {
+        goto media_started;
+    }
+    fprintf(stderr, "Failed to start MiniDLNA\n");
+    syslog(LOG_ERR, "sharing-helper: Failed to start MiniDLNA");
+    exit(1);
+#elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD)
+    system("sysrc minidlna_enable=YES");
+    if (system("service minidlna start") == 0) {
+        goto media_started;
+    }
+    fprintf(stderr, "Failed to start MiniDLNA\n");
+    syslog(LOG_ERR, "sharing-helper: Failed to start MiniDLNA");
+    exit(1);
+#elif defined(PLATFORM_OPENBSD)
+    system("rcctl enable minidlna");
+    if (system("rcctl start minidlna") == 0) {
+        goto media_started;
+    }
+    fprintf(stderr, "Failed to start MiniDLNA\n");
+    syslog(LOG_ERR, "sharing-helper: Failed to start MiniDLNA");
+    exit(1);
+#endif
+
+media_started:
+    syslog(LOG_INFO, "sharing-helper: MiniDLNA started");
+    exit(0);
+}
+
+/* Stop MiniDLNA */
+static void cmd_media_stop(void)
+{
+    syslog(LOG_INFO, "sharing-helper: Stopping MiniDLNA");
+
+#ifdef PLATFORM_LINUX
+    if (system("which systemctl >/dev/null 2>&1") == 0) {
+        system("systemctl stop minidlna.service >/dev/null 2>&1");
+    }
+    system("service minidlna stop >/dev/null 2>&1");
+    system("test -x /etc/init.d/minidlna && /etc/init.d/minidlna stop >/dev/null 2>&1");
+    system("pkill -x minidlna minidlnad >/dev/null 2>&1");
+#elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD)
+    system("service minidlna stop");
+    system("pkill -x minidlna minidlnad >/dev/null 2>&1");
+#elif defined(PLATFORM_OPENBSD)
+    system("rcctl stop minidlna");
+    system("pkill -x minidlna minidlnad >/dev/null 2>&1");
+#endif
+
+    syslog(LOG_INFO, "sharing-helper: MiniDLNA stopped");
+    exit(0);
+}
+
 /* Usage */
 static void usage(const char *progname)
 {
@@ -1123,6 +1238,10 @@ static void usage(const char *progname)
     fprintf(stderr, "  web-installed         Check if nginx is installed\n");
     fprintf(stderr, "  web-start             Start Web Server (nginx)\n");
     fprintf(stderr, "  web-stop              Stop Web Server (nginx)\n");
+    fprintf(stderr, "  media-status          Check Media Sharing (MiniDLNA) status\n");
+    fprintf(stderr, "  media-installed       Check if MiniDLNA is installed\n");
+    fprintf(stderr, "  media-start           Start Media Sharing (MiniDLNA)\n");
+    fprintf(stderr, "  media-stop            Stop Media Sharing (MiniDLNA)\n");
     exit(1);
 }
 
@@ -1163,6 +1282,10 @@ int main(int argc, char *argv[])
         cmd_web_status();
     } else if (strcmp(cmd, "web-installed") == 0) {
         cmd_web_installed();
+    } else if (strcmp(cmd, "media-status") == 0) {
+        cmd_media_status();
+    } else if (strcmp(cmd, "media-installed") == 0) {
+        cmd_media_installed();
     }
     
     /* Commands that require root */
@@ -1203,6 +1326,10 @@ int main(int argc, char *argv[])
         cmd_web_start();
     } else if (strcmp(cmd, "web-stop") == 0) {
         cmd_web_stop();
+    } else if (strcmp(cmd, "media-start") == 0) {
+        cmd_media_start();
+    } else if (strcmp(cmd, "media-stop") == 0) {
+        cmd_media_stop();
     } else {
         fprintf(stderr, "Error: Unknown command: %s\n", cmd);
         usage(argv[0]);

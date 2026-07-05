@@ -25,6 +25,7 @@
     NSButton *afpCheckbox;
     NSButton *smbCheckbox;
     NSButton *webCheckbox;
+    NSButton *mediaCheckbox;
     
     // Status labels
     NSTextField *sshStatusLabel;
@@ -33,6 +34,7 @@
     NSTextField *afpStatusLabel;
     NSTextField *smbStatusLabel;
     NSTextField *webStatusLabel;
+    NSTextField *mediaStatusLabel;
     
     // Information displays
     NSTextField *sshInfoLabel;
@@ -41,6 +43,7 @@
     NSTextField *afpInfoLabel;
     NSTextField *smbInfoLabel;
     NSTextField *webInfoLabel;
+    NSTextField *mediaInfoLabel;
     
     // mDNS status label
     NSTextField *mdnsStatusLabel;
@@ -52,6 +55,7 @@
     BOOL afpEnabled;
     BOOL smbEnabled;
     BOOL webEnabled;
+    BOOL mediaEnabled;
 
     // Installation state
     BOOL sshInstalled;
@@ -60,6 +64,7 @@
     BOOL afpInstalled;
     BOOL smbInstalled;
     BOOL webInstalled;
+    BOOL mediaInstalled;
 
     NSString *currentHostname;
     
@@ -82,6 +87,7 @@
 - (void)toggleAFP:(id)sender;
 - (void)toggleSMB:(id)sender;
 - (void)toggleWeb:(id)sender;
+- (void)toggleMedia:(id)sender;
 - (void)hostnameDidChange:(NSNotification *)notification;
 
 @end

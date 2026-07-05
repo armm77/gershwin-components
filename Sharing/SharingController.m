@@ -43,6 +43,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         afpEnabled = NO;
         smbEnabled = NO;
         webEnabled = NO;
+        mediaEnabled = NO;
         currentHostname = nil;
         
         // Find helper path
@@ -97,18 +98,21 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     [afpCheckbox release];
     [smbCheckbox release];
     [webCheckbox release];
+    [mediaCheckbox release];
     [sshStatusLabel release];
     [vncStatusLabel release];
     [sftpStatusLabel release];
     [afpStatusLabel release];
     [smbStatusLabel release];
     [webStatusLabel release];
+    [mediaStatusLabel release];
     [sshInfoLabel release];
     [vncInfoLabel release];
     [sftpInfoLabel release];
     [afpInfoLabel release];
     [smbInfoLabel release];
     [webInfoLabel release];
+    [mediaInfoLabel release];
     [mdnsStatusLabel release];
     [currentHostname release];
     [helperPath release];
@@ -347,6 +351,26 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (BOOL)getWebInstalled
 {
     NSString *output = [self runHelper:@"web-installed"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"installed"];
+    }
+    return YES;
+}
+
+- (BOOL)getMediaStatus
+{
+    NSString *output = [self runHelper:@"media-status"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"running"];
+    }
+    return NO;
+}
+
+- (BOOL)getMediaInstalled
+{
+    NSString *output = [self runHelper:@"media-installed"];
     if (output) {
         NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         return [trimmed isEqualToString:@"installed"];
@@ -709,6 +733,57 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     }
 }
 
+- (void)toggleMedia:(id)sender
+{
+    BOOL shouldEnable = [mediaCheckbox state] == NSOnState;
+    NSString *command = shouldEnable ? @"media-start" : @"media-stop";
+
+    NSDebugLog(@"SharingController: %@ Media Sharing", shouldEnable ? @"Starting" : @"Stopping");
+
+    BOOL success = [self runHelperWithSudo:command];
+
+    if (success) {
+        mediaEnabled = shouldEnable;
+
+        if (shouldEnable) {
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable]) {
+                BOOL announced = [mgr announceService:GSServiceTypeMedia
+                                                                     port:8200
+                                                                txtRecord:nil];
+                if (announced) {
+                    NSDebugLog(@"SharingController: Media Sharing service announced via mDNS");
+                } else {
+                    NSDebugLog(@"SharingController: Failed to announce Media Sharing service via mDNS");
+                    NSRunAlertPanel(@"Media Sharing Warning",
+                                   @"Media Sharing started but could not be announced on the network.",
+                                   @"OK", nil, nil);
+                }
+            }
+        } else {
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable]) {
+                [mgr unannounceService:GSServiceTypeMedia];
+                NSDebugLog(@"SharingController: Media Sharing service unannounced from mDNS");
+            }
+        }
+
+        [self refreshStatus:nil];
+        NSDebugLog(@"SharingController: Media Sharing %@", shouldEnable ? @"started" : @"stopped");
+    } else {
+        [mediaCheckbox setState:mediaEnabled ? NSOnState : NSOffState];
+        NSRunAlertPanel(@"Media Sharing Error",
+                       @"Failed to modify Media Sharing service.\n\n"
+                       @"Media Sharing requires MiniDLNA (ReadyMedia) to be installed.\n"
+                       @"Please install using your system's package manager:\n"
+                       @"• Debian/Ubuntu: sudo apt-get install minidlna\n"
+                       @"• Fedora/RHEL: sudo dnf install minidlna\n"
+                       @"• FreeBSD: sudo pkg install minidlna\n"
+                       @"• Arch: sudo pacman -S minidlna",
+                       @"OK", nil, nil);
+    }
+}
+
 - (void)toggleWeb:(id)sender
 {
     BOOL shouldEnable = [webCheckbox state] == NSOnState;
@@ -786,6 +861,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         BOOL afp  = [self getAFPStatus];
         BOOL smb  = [self getSMBStatus];
         BOOL web  = [self getWebStatus];
+        BOOL media  = [self getMediaStatus];
         // Also query installation state for each service
         BOOL isSshInstalled  = [self getSSHInstalled];
         BOOL isVncInstalled  = [self getVNCInstalled];
@@ -793,24 +869,25 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         BOOL isAfpInstalled  = [self getAFPInstalled];
         BOOL isSmbInstalled  = [self getSMBInstalled];
         BOOL isWebInstalled  = [self getWebInstalled];
+        BOOL isMediaInstalled  = [self getMediaInstalled];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             isRefreshingStatus = NO;
             [self updateUIWithHostname:hostname
-                                   ssh:ssh vnc:vnc sftp:sftp afp:afp smb:smb web:web
+                                   ssh:ssh vnc:vnc sftp:sftp afp:afp smb:smb web:web media:media
                           sshInstalled:isSshInstalled vncInstalled:isVncInstalled
                          sftpInstalled:isSftpInstalled afpInstalled:isAfpInstalled
-                          smbInstalled:isSmbInstalled webInstalled:isWebInstalled];
+                          smbInstalled:isSmbInstalled webInstalled:isWebInstalled mediaInstalled:isMediaInstalled];
         });
     });
 }
 
 - (void)updateUIWithHostname:(NSString *)hostname
                           ssh:(BOOL)ssh vnc:(BOOL)vnc sftp:(BOOL)sftp
-                          afp:(BOOL)afp smb:(BOOL)smb web:(BOOL)web
+                          afp:(BOOL)afp smb:(BOOL)smb web:(BOOL)web media:(BOOL)media
                  sshInstalled:(BOOL)isSshInstalled vncInstalled:(BOOL)isVncInstalled
                 sftpInstalled:(BOOL)isSftpInstalled afpInstalled:(BOOL)isAfpInstalled
-                 smbInstalled:(BOOL)isSmbInstalled webInstalled:(BOOL)isWebInstalled
+                 smbInstalled:(BOOL)isSmbInstalled webInstalled:(BOOL)isWebInstalled mediaInstalled:(BOOL)isMediaInstalled
 {
     // Safety check in case the pane was unselected while we were querying
     if (!hostnameField || !sshCheckbox) {
@@ -1115,6 +1192,49 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
             }
         }
     }
+
+    // --- Media Sharing ---
+    if (!isMediaInstalled) {
+        [mediaCheckbox setEnabled:NO];
+        [mediaCheckbox setState:NSOffState];
+        [mediaStatusLabel setStringValue:@"N/A"];
+        [mediaStatusLabel setTextColor:naColor];
+        [mediaInfoLabel setStringValue:@"Install MiniDLNA (ReadyMedia) to enable Media Sharing."];
+        [mediaInfoLabel setHidden:NO];
+    } else {
+        [mediaCheckbox setEnabled:YES];
+        mediaEnabled = media;
+        [mediaCheckbox setState:mediaEnabled ? NSOnState : NSOffState];
+
+        if (mediaEnabled) {
+            [mediaStatusLabel setStringValue:@"On"];
+            [mediaStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
+
+            NSString *info = [NSString stringWithFormat:@"Media Sharing available at: http://%@:8200", serviceAddress];
+            [mediaInfoLabel setStringValue:info];
+            [mediaInfoLabel setHidden:NO];
+
+            // Ensure mDNS announcement is active
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                ![mgr isServiceAnnounced:GSServiceTypeMedia]) {
+                [mgr announceService:GSServiceTypeMedia port:8200 txtRecord:nil];
+                NSDebugLog(@"SharingController: Re-announced Media Sharing service via mDNS");
+            }
+        } else {
+            [mediaStatusLabel setStringValue:@"Off"];
+            [mediaStatusLabel setTextColor:[NSColor grayColor]];
+            [mediaInfoLabel setHidden:YES];
+
+            // Ensure mDNS announcement is stopped
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                [mgr isServiceAnnounced:GSServiceTypeMedia]) {
+                [mgr unannounceService:GSServiceTypeMedia];
+                NSDebugLog(@"SharingController: Unannounced Media Sharing service from mDNS");
+            }
+        }
+    }
 }
 
 #pragma mark - UI Creation
@@ -1129,7 +1249,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     // - 8px between control and its label
     // - 20px between control groups
     
-    CGFloat viewHeight = 433;
+    CGFloat viewHeight = 476;
     NSView *mainView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 595, viewHeight)];
     [mainView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
@@ -1405,6 +1525,38 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     [webInfoLabel setTextColor:[NSColor darkGrayColor]];
     [webInfoLabel setHidden:YES];
     [mainView addSubview:webInfoLabel];
+
+    yPos -= serviceRowHeight;  // Move to next service row
+
+    // Media Sharing (MiniDLNA) Service
+    mediaCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(leftMargin, yPos - METRICS_RADIO_BUTTON_SIZE, 230, METRICS_RADIO_BUTTON_SIZE)];
+    [mediaCheckbox setTitle:@"Media Sharing (MiniDLNA)"];
+    [mediaCheckbox setButtonType:NSSwitchButton];
+    [mediaCheckbox setTarget:self];
+    [mediaCheckbox setAction:@selector(toggleMedia:)];
+    [mediaCheckbox setFont:[NSFont systemFontOfSize:13]];
+    [mainView addSubview:mediaCheckbox];
+
+    mediaStatusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(leftMargin + 230 + METRICS_SPACE_8, yPos - 17, 60, 17)];
+    [mediaStatusLabel setStringValue:@"Off"];
+    [mediaStatusLabel setBezeled:NO];
+    [mediaStatusLabel setDrawsBackground:NO];
+    [mediaStatusLabel setEditable:NO];
+    [mediaStatusLabel setSelectable:NO];
+    [mediaStatusLabel setFont:[NSFont boldSystemFontOfSize:13]];
+    [mediaStatusLabel setTextColor:[NSColor grayColor]];
+    [mainView addSubview:mediaStatusLabel];
+
+    mediaInfoLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(leftMargin + METRICS_SPACE_16, yPos - METRICS_RADIO_BUTTON_SIZE - 17, width - METRICS_SPACE_16, 17)];
+    [mediaInfoLabel setStringValue:@""];
+    [mediaInfoLabel setBezeled:NO];
+    [mediaInfoLabel setDrawsBackground:NO];
+    [mediaInfoLabel setEditable:NO];
+    [mediaInfoLabel setSelectable:YES];
+    [mediaInfoLabel setFont:[NSFont systemFontOfSize:11]];
+    [mediaInfoLabel setTextColor:[NSColor darkGrayColor]];
+    [mediaInfoLabel setHidden:YES];
+    [mainView addSubview:mediaInfoLabel];
 
     yPos -= 17 + METRICS_SPACE_20;  // 20px gap between control groups
     
