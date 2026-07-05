@@ -4,6 +4,8 @@ GNUSTEP_SYSTEM_APPS := $(GNUSTEP_SYSTEM_APPS)/Utilities
 
 # Application configuration
 APP_NAME = InstallationAssistant
+InstallationAssistant_APPLICATION_ICON = InstallationAssistant.png
+InstallationAssistant_INFOPLIST_FILE = InstallationAssistantInfo.plist
 
 # Source files
 InstallationAssistant_OBJC_FILES = InstallationAssistant.m InstallationSteps.m
@@ -13,7 +15,8 @@ InstallationAssistant_RESOURCE_FILES = \
 	Resources/en.lproj/Localizable.strings \
 	Resources/de.lproj/Localizable.strings \
 	Resources/installer-FreeBSD.sh \
-	Resources/installer-Linux.sh
+	Resources/installer-Linux.sh \
+	Resources/InstallationAssistant.png
 
 # Required frameworks and libraries - use GNUstep naming
 InstallationAssistant_GUI_LIBS += -lgnustep-gui -lgnustep-base
