@@ -1386,6 +1386,8 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     NSString *path = [sender representedObject];
     if (!path) return;
 
+    NSLog(@"AppMenuWidget: Launching application at %@", path);
+
     NSMenu *parentMenu = [sender menu];
     if (parentMenu && [parentMenu respondsToSelector:@selector(cancelTracking)]) {
         [parentMenu performSelector:@selector(cancelTracking)];
@@ -1394,15 +1396,30 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSWorkspace *ws = [NSWorkspace sharedWorkspace];
         NSString *bundleName = [[path lastPathComponent] stringByDeletingPathExtension];
+
+        /* Try name-based lookup (works for apps in standard directories). */
         if (bundleName && [ws launchApplication:bundleName]) return;
+
+        /* Try full path (handles apps in subdirectories like Utilities/). */
+        if ([ws launchApplication:path]) return;
 
         NSString *infoPath = [path stringByAppendingPathComponent:@"Contents/Info.plist"];
         NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:infoPath];
         NSString *bundleID = info[@"CFBundleIdentifier"];
         if (bundleID && [ws launchApplication:bundleID]) return;
 
-        if ([ws openURL:[NSURL fileURLWithPath:path]]) return;
-        if ([ws openFile:path]) return;
+        /* Launch directly via the executable inside the bundle. */
+        NSString *execName = info[@"CFBundleExecutable"];
+        if (execName)
+          {
+            NSString *execPath = [path stringByAppendingPathComponent:
+              [@"Contents/MacOS/" stringByAppendingString: execName]];
+            if ([[NSFileManager defaultManager] isExecutableFileAtPath: execPath])
+              {
+                [NSTask launchedTaskWithLaunchPath: execPath arguments: @[]];
+                return;
+              }
+          }
 
         NSLog(@"AppMenuWidget: Failed to launch application at %@", path);
     });
@@ -1413,6 +1430,8 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     NSString *path = [sender representedObject];
     if (!path) return;
 
+    NSLog(@"AppMenuWidget: Opening folder in Workspace: %@", path);
+
     NSMenu *parentMenu = [sender menu];
     if (parentMenu && [parentMenu respondsToSelector:@selector(cancelTracking)]) {
         [parentMenu performSelector:@selector(cancelTracking)];
@@ -1422,13 +1441,17 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         NSURL *fileURL = [NSURL fileURLWithPath:path];
         NSString *uri = [fileURL absoluteString];
 
-        NSDebugLLog(@"gwcomp", @"AppMenuWidget: Opening folder in Workspace: %@", uri);
+        NSLog(@"AppMenuWidget: Opening folder in Workspace via D-Bus: %@", uri);
 
-        [[GNUDBusConnection sessionBus] callMethod:@"ShowFolders"
-                                        onService:@"org.freedesktop.FileManager1"
-                                      objectPath:@"/org/freedesktop/FileManager1"
-                                       interface:@"org.freedesktop.FileManager1"
-                                       arguments:@[@[uri], @""]];
+        id result = [[GNUDBusConnection sessionBus] callMethod:@"ShowFolders"
+                                                    onService:@"org.freedesktop.FileManager1"
+                                                  objectPath:@"/org/freedesktop/FileManager1"
+                                                   interface:@"org.freedesktop.FileManager1"
+                                                   arguments:@[@[uri], @""]];
+        if (!result)
+          {
+            NSLog(@"AppMenuWidget: D-Bus ShowFolders call returned nil (FileManager1 not running?)");
+          }
     });
 }
 
