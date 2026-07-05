@@ -32,9 +32,9 @@ CreateLiveMediaAssistant_RESOURCE_FILES = \
 # Required frameworks and libraries - use GNUstep naming (copy from working assistant)
 CreateLiveMediaAssistant_GUI_LIBS += -lgnustep-gui -lgnustep-base
 
-# Compiler and linker flags - embed framework in bundle with proper FreeBSD rpath
+# Compiler and linker flags - embed framework in bundle with proper rpath
 CreateLiveMediaAssistant_CPPFLAGS += -Wall -Wextra -fobjc-arc -Werror -Wno-unused-parameter -O2 -I$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1/Headers
-CreateLiveMediaAssistant_LDFLAGS += -L$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1 -lGSAssistantFramework -Wl,-rpath,'$$ORIGIN/Frameworks/GSAssistantFramework.framework/Versions/1'
+CreateLiveMediaAssistant_LDFLAGS += -L$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1 -lGSAssistantFramework -Wl,-rpath,'$$ORIGIN/Frameworks/GSAssistantFramework.framework/Versions/1' -Wl,-rpath,/System/Library/Libraries
 CreateLiveMediaAssistant_LDFLAGS += -ldispatch
 
 include $(GNUSTEP_MAKEFILES)/application.make
