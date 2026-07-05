@@ -11,6 +11,9 @@
 #import <AVFoundation/AVFoundation.h>
 #import "ItemFlowView.h"
 #import "RadioManager.h"
+#import "StreamPlayer.h"
+#import "YTDLPBackend.h"
+#import "PreferencesController.h"
 
 typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
     PlayerPlaybackStateStopped,
@@ -23,7 +26,7 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     PlayerModeRadio
 };
 
-@interface PlayerController : NSObject <NSWindowDelegate, ItemFlowViewDataSource, ItemFlowViewDelegate, RadioManagerDelegate>
+@interface PlayerController : NSObject <NSWindowDelegate, ItemFlowViewDataSource, ItemFlowViewDelegate, RadioManagerDelegate, YTDLPBackendDelegate, StreamPlayerDelegate>
 {
     // Main window
     NSWindow *mainWindow;
@@ -107,6 +110,12 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     RadioStation *_pendingRadioStation;
     NSTimeInterval _lastSelectionTime;
     BOOL _debounceScheduled;
+
+    // ---- yt-dlp / URL Streaming ---- //
+    YTDLPBackend *_ytdlpBackend;
+    BOOL _ytdlpAvailable;
+    NSString *_pendingStreamTitle;
+    PreferencesController *_preferencesController;
 }
 
 // Properties
@@ -147,6 +156,7 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 
 // Playback actions
 - (IBAction)openFile:(id)sender;
+- (IBAction)openURL:(id)sender;
 - (IBAction)playPause:(id)sender;
 - (IBAction)stop:(id)sender;
 - (IBAction)previousTrack:(id)sender;
@@ -175,7 +185,7 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 - (NSImage *)extractCoverArtForFile:(NSString *)filePath;
 
 // Playlist
-- (void)addToPlaylist:(NSString *)filePath;
+- (BOOL)addToPlaylist:(NSString *)filePath;
 - (void)playFromPlaylistAtIndex:(int)index;
 
 // Timer
@@ -207,6 +217,18 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 - (void)radioVolumeChanged:(id)sender;
 - (void)radioMuteToggled:(id)sender;
 - (void)updateRadioUI;
+
+// ---- Open URL / yt-dlp ---- //
+- (IBAction)openPreferences:(id)sender;
+- (void)playStreamURL:(NSString *)url withTitle:(NSString *)title;
+- (void)checkYTDLPAvailability;
+
+// YTDLPBackendDelegate
+- (void)ytdlpBackend:(YTDLPBackend *)backend didResolveURL:(NSString *)streamURL
+              title:(NSString *)title thumbnail:(NSString *)thumbnailURL
+            duration:(NSTimeInterval)duration;
+- (void)ytdlpBackend:(YTDLPBackend *)backend didFailWithError:(NSString *)error;
+- (void)ytdlpBackendDidCancel:(YTDLPBackend *)backend;
 
 @end
 

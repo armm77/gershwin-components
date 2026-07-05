@@ -49,14 +49,18 @@ Player_HEADER_FILES = \
 	RadioStation.h \
 	RadioBrowser.h \
 	StreamPlayer.h \
-	RadioManager.h
+	RadioManager.h \
+	YTDLPBackend.h \
+	PreferencesController.h
 
 Player_OBJC_FILES = \
 	PlayerController.m \
 	RadioStation.m \
 	RadioBrowser.m \
 	StreamPlayer.m \
-	RadioManager.m
+	RadioManager.m \
+	YTDLPBackend.m \
+	PreferencesController.m
 
 Player_OBJC_FILES += Player_main.m
 
@@ -84,8 +88,8 @@ ADDITIONAL_GUI_LIBS += -ldispatch
 #
 # FFmpeg and libao for internet radio streaming (StreamPlayer)
 #
-ADDITIONAL_INCLUDE_DIRS += $(shell pkg-config --cflags libavformat libavcodec libavutil libswresample)
-ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs libavformat libavcodec libavutil libswresample)
+ADDITIONAL_INCLUDE_DIRS += $(shell pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)
+ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs libavformat libavcodec libavutil libswresample libswscale)
 ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs ao)
 
 -include GNUmakefile.preamble

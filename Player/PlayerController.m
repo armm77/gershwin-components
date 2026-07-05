@@ -23,8 +23,17 @@
 #import "ItemFlowView.h"
 #import "RadioStation.h"
 
+@class VideoRenderView;
+
 // Forward declarations for internal methods used by DropTargetView
 @interface PlayerController () // class extension
+{
+    NSString *_modalInputResult;
+    NSPanel *_modalInputPanel;
+    NSTextField *_modalInputField;
+    VideoRenderView *_videoRenderView;
+    BOOL _usingStreamPlayer;
+}
 - (void)restoreWindowTitle;
 - (void)handleDroppedFiles:(NSArray *)filePaths;
 - (NSArray *)scanFolderForMediaFiles:(NSString *)folderPath;
@@ -33,6 +42,11 @@
 - (void)radioPlaySelected;
 - (void)radioPreviousStation;
 - (void)radioNextStation;
+- (NSString *)_inputDialogWithTitle:(NSString *)title
+                            message:(NSString *)message
+                        placeholder:(NSString *)placeholder;
+- (void)_dismissInputDialog:(id)sender;
+- (void)_setupAVPlayerWithURL:(NSURL *)streamURL;
 @end
 
 // Default window size (content rect, excl. titlebar)
@@ -110,6 +124,131 @@
 
 @end
 
+#pragma mark - VideoRenderView (custom NSView that draws RGBA frame data)
+
+/**
+ * Displays raw RGBA video frame data by creating NSBitmapImageRep
+ * + NSImage in drawRect: from stored raw data. Uses window-level
+ * display to ensure GNUstep flushes the backing store to screen.
+ */
+@interface VideoRenderView : NSView
+{
+    NSBitmapImageRep *_cachedRep;
+    NSImage *_cachedImage;
+    int _frameWidth;
+    int _frameHeight;
+}
+- (void)setFrameData:(NSData *)data width:(int)width height:(int)height;
+@end
+
+@implementation VideoRenderView
+
+- (void)dealloc
+{
+    [_cachedImage release];
+    [_cachedRep release];
+    [super dealloc];
+}
+
+- (void)setFrameData:(NSData *)data width:(int)width height:(int)height
+{
+    if (width <= 0 || height <= 0 || !data || [data length] == 0) {
+        return;
+    }
+
+    int bpr = width * 4;
+    int expectedLen = bpr * height;
+    if ((int)[data length] < expectedLen) {
+        NSLog(@"[VideoRenderView] frame data too small: got %tu, expected %d",
+              [data length], expectedLen);
+        return;
+    }
+
+    // Recreate cached bitmap rep only when dimensions change
+    if (!_cachedRep || _frameWidth != width || _frameHeight != height) {
+        [_cachedImage release];
+        _cachedImage = nil;
+        [_cachedRep release];
+        _cachedRep = nil;
+
+        _cachedRep = [[NSBitmapImageRep alloc]
+            initWithBitmapDataPlanes:NULL
+                          pixelsWide:width
+                          pixelsHigh:height
+                       bitsPerSample:8
+                     samplesPerPixel:4
+                            hasAlpha:YES
+                            isPlanar:NO
+                      colorSpaceName:NSDeviceRGBColorSpace
+                         bytesPerRow:bpr
+                        bitsPerPixel:32];
+        if (!_cachedRep) {
+            NSLog(@"[VideoRenderView] ERROR: failed to create NSBitmapImageRep %dx%d",
+                  width, height);
+            _frameWidth = 0;
+            _frameHeight = 0;
+            return;
+        }
+
+        _cachedImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+        [_cachedImage addRepresentation:_cachedRep];
+    }
+
+    // Copy frame data into the cached bitmap rep's backing buffer
+    void *bmData = [_cachedRep bitmapData];
+    if (!bmData) {
+        NSLog(@"[VideoRenderView] ERROR: bitmapData is NULL for %dx%d rep", width, height);
+        return;
+    }
+    memcpy(bmData, [data bytes], expectedLen);
+
+    _frameWidth = width;
+    _frameHeight = height;
+
+    // Force immediate synchronous drawing — display triggers
+    // drawRect: directly without waiting for the next run-loop iteration.
+    [self display];
+    [[self window] flushWindow];
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSLog(@"[VideoRenderView] drawRect: _frameWidth=%d _frameHeight=%d hasCachedImage=%d",
+          _frameWidth, _frameHeight, (_cachedImage != nil));
+
+    if (!_cachedImage) {
+        [[NSColor blackColor] set];
+        NSRectFill(self.bounds);
+        return;
+    }
+
+    NSRect srcRect = NSMakeRect(0, 0, _frameWidth, _frameHeight);
+    NSRect dstRect = self.bounds;
+
+    // Aspect-preserving fit
+    float srcAspect = (float)_frameWidth / (float)_frameHeight;
+    float dstAspect = dstRect.size.width / MAX(dstRect.size.height, 1.0f);
+    if (srcAspect > dstAspect) {
+        float newH = dstRect.size.width / srcAspect;
+        dstRect.origin.y += (dstRect.size.height - newH) * 0.5f;
+        dstRect.size.height = newH;
+    } else {
+        float newW = dstRect.size.height * srcAspect;
+        dstRect.origin.x += (dstRect.size.width - newW) * 0.5f;
+        dstRect.size.width = newW;
+    }
+
+    // Letterbox background
+    [[NSColor blackColor] set];
+    NSRectFill(self.bounds);
+
+    // Draw the cached frame
+    [_cachedImage drawInRect:dstRect fromRect:srcRect
+                   operation:NSCompositeSourceOver fraction:1.0];
+}
+
+@end
+
 #pragma mark -
 
 @implementation PlayerController
@@ -172,6 +311,14 @@
         if ([defaults objectForKey:@"PlayerMode"]) {
             playerMode = [defaults integerForKey:@"PlayerMode"];
         }
+
+        // ---- yt-dlp / URL Streaming ---- //
+        _ytdlpBackend = [[YTDLPBackend alloc] init];
+        [_ytdlpBackend setDelegate:self];
+        [_ytdlpBackend setYtdlpPath:[PreferencesController ytdlpPath]];
+        _ytdlpAvailable = NO;
+        _pendingStreamTitle = nil;
+        _preferencesController = nil;  // created lazily when opening prefs
     }
     return self;
 }
@@ -215,6 +362,9 @@
                                              selector:@selector(checkDebounce)
                                                object:nil];
     [_pendingRadioStation release];
+    [_ytdlpBackend release];
+    [_pendingStreamTitle release];
+    [_preferencesController release];
     [super dealloc];
 }
 
@@ -236,8 +386,9 @@
     [aboutItem setTarget:NSApp];
     [appMenu addItem:[NSMenuItem separatorItem]];
     [appMenu addItemWithTitle:@"Preferences..."
-                       action:NULL
+                       action:@selector(openPreferences:)
                 keyEquivalent:@","];
+    [[appMenu itemAtIndex:[appMenu numberOfItems] - 1] setTarget:self];
     [appMenu addItem:[NSMenuItem separatorItem]];
     [appMenu addItemWithTitle:@"Hide Player"
                        action:@selector(hide:)
@@ -269,6 +420,11 @@
                             action:@selector(openFile:)
                      keyEquivalent:@"o"];
     [openItem setTarget:self];
+    NSMenuItem *openURLItem = (NSMenuItem *)
+        [fileMenu addItemWithTitle:@"Open URL..."
+                            action:@selector(openURL:)
+                     keyEquivalent:@"U"];
+    [openURLItem setTarget:self];
     [fileMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *closeItem = (NSMenuItem *)
         [fileMenu addItemWithTitle:@"Close Window"
@@ -466,6 +622,12 @@
     [videoView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     [videoView setHidden:YES];
     [contentView addSubview:videoView];
+
+    // Image view inside videoView for decoded video frames
+    _videoRenderView = [[VideoRenderView alloc] initWithFrame:[videoView bounds]];
+    [_videoRenderView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    [videoView addSubview:_videoRenderView];
+    [_videoRenderView release]; // retained by videoView subview
 
     // Progress spinner (centered on the cover area)
     NSRect progressFrame = NSMakeRect(0, 0, 24, 24);
@@ -1206,6 +1368,14 @@
     if (mainWindow) {
         [mainWindow makeKeyAndOrderFront:self];
     }
+    // Check yt-dlp availability on startup
+    [self checkYTDLPAvailability];
+    if (_ytdlpAvailable) {
+        NSLog( @"[Player] yt-dlp is available for URL resolution");
+    } else {
+        NSLog(@"[Player] yt-dlp not found - URL resolution disabled");
+    }
+
     [self updateStatus:@"Ready — open a media file to start playing"];
 }
 
@@ -1240,6 +1410,75 @@
 - (IBAction)openFile:(id)sender
 {
     [self showOpenPanel];
+}
+
+- (IBAction)openURL:(id)sender
+{
+    NSLog(@"[Player] >>> openURL: CALLED (sender=%@)", sender);
+    // Only offer yt-dlp resolution if it's available
+    if (!_ytdlpAvailable) {
+        [self checkYTDLPAvailability];
+        if (!_ytdlpAvailable) {
+            NSAlert *alert = [[NSAlert alloc] init];
+            [alert setMessageText:@"yt-dlp Not Available"];
+            [alert setInformativeText:@"To open streaming URLs from sites like YouTube, "
+                @"you need yt-dlp installed.\n\n"
+                @"Install it with your package manager (e.g., 'apt install yt-dlp' "
+                @"or 'brew install yt-dlp'), then set the path in Preferences."];
+            [alert addButtonWithTitle:@"Open Preferences"];
+            [alert addButtonWithTitle:@"Cancel"];
+            NSInteger result = [alert runModal];
+            [alert release];
+            if (result == NSAlertFirstButtonReturn) {
+                [self openPreferences:sender];
+            }
+            return;
+        }
+    }
+
+    // Prompt for URL
+    NSString *urlString = [self _inputDialogWithTitle:@"Open URL"
+                                              message:@"Enter a URL from YouTube, SoundCloud, Vimeo, or other streaming site."
+                                          placeholder:@"https://www.youtube.com/watch?v=..."];
+
+    NSLog(@"[Player] openURL - user entered: %@", urlString);
+
+    if ([urlString length] > 0) {
+        // If it looks like a local file or direct stream URL, play it directly
+        if ([urlString hasPrefix:@"http://"] || [urlString hasPrefix:@"https://"]) {
+            // Check if it looks like a direct stream URL (common patterns)
+            BOOL isDirectStream = NO;
+            NSArray *directExtensions = @[@".mp3", @".wav", @".ogg", @".flac",
+                                           @".m4a", @".aac", @".mp4", @".m3u8",
+                                           @".pls", @".asx", @".xspf"];
+            NSString *lower = [urlString lowercaseString];
+            for (NSString *ext in directExtensions) {
+                if ([lower hasSuffix:ext]) {
+                    isDirectStream = YES;
+                    break;
+                }
+            }
+
+            if (isDirectStream) {
+                NSLog(@"[Player] openURL - detected direct stream URL, playing directly");
+                // Play directly
+                [self playStreamURL:urlString withTitle:[urlString lastPathComponent]];
+            } else {
+                NSLog(@"[Player] openURL - sending to yt-dlp for resolution");
+                // Resolve via yt-dlp
+                [self updateStatus:[NSString stringWithFormat:@"Resolving URL via yt-dlp..."]];
+                [progressIndicator setHidden:NO];
+                [progressIndicator startAnimation:self];
+                [_ytdlpBackend setFormatSpec:[PreferencesController selectedFormat]];
+                [_ytdlpBackend resolveURL:urlString];
+            }
+        } else {
+            NSLog(@"[Player] openURL - non-http URL, routing to radio manager: %@",
+                        urlString);
+            // Try as radio stream (non-http or bare stream URL)
+            [[RadioManager sharedManager] playURL:urlString];
+        }
+    }
 }
 
 - (IBAction)playPause:(id)sender
@@ -1385,24 +1624,50 @@
 
     isVideo = [self isVideoFile:filePath];
 
+    // Exit radio mode when loading a local file
+    if (playerMode == PlayerModeRadio) {
+        [self exitRadioMode];
+    }
+
     [self updateStatus:[NSString stringWithFormat:@"Loading %@...", [filePath lastPathComponent]]];
     [progressIndicator setHidden:NO];
     [progressIndicator startAnimation:self];
 
     if (isVideo) {
-        [videoView setHidden:NO];
-        [flowView setHidden:YES];
-
+        // Keep AVURLAsset for metadata extraction and cover art
         NSURL *url = [NSURL fileURLWithPath:filePath];
         urlAsset = [[AVURLAsset alloc] initWithURL:url options:nil];
-        playerItem = [[AVPlayerItem alloc] initWithAsset:urlAsset];
-        avPlayer = [[AVPlayer alloc] initWithPlayerItem:playerItem];
-        [avPlayer setActionAtItemEnd:AVPlayerActionAtItemEndPause];
 
-        // In GNUstep, video rendering isn't available yet,
-        // so fall back to cover art + audio playback
-        [videoView setHidden:YES];
-        [flowView setHidden:NO];
+        // Use FFmpeg-based StreamPlayer for local video files.
+        // GNUstep's AVFoundation does not support video rendering,
+        // but StreamPlayer decodes video frames via FFmpeg and
+        // renders them through VideoRenderView.
+        [[StreamPlayer sharedPlayer] stop];
+        [[StreamPlayer sharedPlayer] close];
+        [[StreamPlayer sharedPlayer] setDelegate:self];
+
+        NSError *err = nil;
+        if ([[StreamPlayer sharedPlayer] openURL:filePath error:&err]) {
+            _usingStreamPlayer = YES;
+            if ([[StreamPlayer sharedPlayer] hasVideo]) {
+                // Show videoView immediately — a video track was found
+                [videoView setHidden:NO];
+                [flowView setHidden:YES];
+            } else {
+                // Audio-only file with a video extension — show flow
+                [videoView setHidden:YES];
+                [flowView setHidden:NO];
+            }
+        } else {
+            NSLog(@"[Player] StreamPlayer failed for %@: %@ — falling back to AVPlayer audio-only",
+                  filePath, [err localizedDescription]);
+            [videoView setHidden:YES];
+            [flowView setHidden:NO];
+            playerItem = [[AVPlayerItem alloc] initWithAsset:urlAsset];
+            avPlayer = [[AVPlayer alloc] initWithPlayerItem:playerItem];
+            [avPlayer setActionAtItemEnd:AVPlayerActionAtItemEndPause];
+            _usingStreamPlayer = NO;
+        }
     } else {
         [videoView setHidden:YES];
         [flowView setHidden:NO];
@@ -1438,13 +1703,13 @@
     [self addToPlaylist:filePath];
 
     // Extract and cache cover art for the ItemFlow view
-    NSDebugLLog(@"gwcomp", @"[Player] requesting cover art for %@", filePath);
+    NSLog( @"[Player] requesting cover art for %@", filePath);
     NSImage *cover = [self extractCoverArtForFile:filePath];
     if (cover) {
-        NSDebugLLog(@"gwcomp", @"[Player] cover art obtained, caching for ItemFlow");
+        NSLog( @"[Player] cover art obtained, caching for ItemFlow");
         [coverImages setObject:cover forKey:filePath];
     } else {
-        NSDebugLLog(@"gwcomp", @"[Player] no cover art available, ItemFlow will show placeholder");
+        NSLog( @"[Player] no cover art available, ItemFlow will show placeholder");
     }
 
     // Keep the flow view's internal array in sync with the playlist size
@@ -1477,8 +1742,25 @@
 
 - (void)play
 {
+    if (_usingStreamPlayer) {
+        NSLog(@"Player: play via StreamPlayer (FFmpeg) (%@)", currentFilePath);
+        [[StreamPlayer sharedPlayer] play];
+        playbackState = PlayerPlaybackStatePlaying;
+        [playButton setImage:[self iconPause]];
+        if (!playbackTimer) {
+            playbackTimer = [[NSTimer scheduledTimerWithTimeInterval:0.5
+                                                              target:self
+                                                            selector:@selector(playbackTimerFired:)
+                                                            userInfo:nil
+                                                             repeats:YES] retain];
+        }
+        return;
+    }
+
     if (avPlayer) {
         NSLog(@"Player: play via AVPlayer (%@)", currentFilePath);
+        NSLog(@"[Player]   AVPlayerItem status: %ld, error: %@",
+              (long)[playerItem status], [[playerItem error] localizedDescription]);
         [avPlayer play];
         playbackState = PlayerPlaybackStatePlaying;
         [playButton setImage:[self iconPause]];
@@ -1512,6 +1794,13 @@
 
 - (void)pause
 {
+    if (_usingStreamPlayer) {
+        [[StreamPlayer sharedPlayer] pause];
+        playbackState = PlayerPlaybackStatePaused;
+        [playButton setImage:[self iconPlay]];
+        return;
+    }
+
     if (avPlayer) {
         [avPlayer pause];
     } else if (audioPlayer) {
@@ -1523,6 +1812,8 @@
 
 - (void)stopPlayback
 {
+    NSLog(@"[Player] stopPlayback called (playbackState=%ld)", (long)playbackState);
+
     if (avPlayer) {
         [avPlayer pause];
         [avPlayer seekToTime:kCMTimeZero];
@@ -1530,6 +1821,11 @@
     if (audioPlayer) {
         [audioPlayer stop];
     }
+    // Stop FFmpeg stream player (handles both audio and video streaming)
+    [[StreamPlayer sharedPlayer] stop];
+    [[StreamPlayer sharedPlayer] close];
+    _usingStreamPlayer = NO;
+
     playbackState = PlayerPlaybackStateStopped;
     [playButton setImage:[self iconPlay]];
 
@@ -1543,6 +1839,11 @@
         [playbackTimer release];
         playbackTimer = nil;
     }
+
+    // Hide video display, show flow view
+    [videoView setHidden:YES];
+    [flowView setHidden:NO];
+    [_videoRenderView setFrameData:nil width:0 height:0];
 }
 
 - (void)updatePlaybackUI
@@ -1741,47 +2042,25 @@
 - (NSImage *)extractCoverArtForFile:(NSString *)filePath
 {
     if (!filePath) {
-        NSDebugLLog(@"gwcomp", @"[Player] extractCoverArtForFile: nil path, returning nil");
+        NSLog( @"[Player] extractCoverArtForFile: nil path, returning nil");
         return nil;
     }
 
-    NSDebugLLog(@"gwcomp", @"[Player] extractCoverArtForFile: %@", filePath);
+    NSLog( @"[Player] extractCoverArtForFile: %@", filePath);
 
-    // ---- 1. Sidecar PNG — same basename, same directory ---- //
-
-    NSString *baseName = [[filePath lastPathComponent] stringByDeletingPathExtension];
-    NSString *directory = [filePath stringByDeletingLastPathComponent];
-    NSString *pngPath = [directory stringByAppendingPathComponent:
-        [baseName stringByAppendingPathExtension:@"png"]];
-
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if ([fm fileExistsAtPath:pngPath]) {
-        NSDebugLLog(@"gwcomp", @"[Player]   sidecar PNG found at %@, loading", pngPath);
-        NSImage *sidecar = [[NSImage alloc] initWithContentsOfFile:pngPath];
-        if (sidecar) {
-            NSDebugLLog(@"gwcomp", @"[Player]   sidecar PNG loaded successfully (size=%@)",
-                        NSStringFromSize([sidecar size]));
-            [sidecar autorelease];
-            return sidecar;  // prefer sidecar over embedded
-        }
-        NSDebugLLog(@"gwcomp", @"[Player]   sidecar PNG exists but failed to decode, falling through");
-    } else {
-        NSDebugLLog(@"gwcomp", @"[Player]   no sidecar PNG at %@", pngPath);
-    }
-
-    // ---- 2. Embedded artwork via AVFoundation ---- //
+    // Embedded artwork via AVFoundation
 
     NSURL *url = [NSURL fileURLWithPath:filePath];
     AVURLAsset *asset = [[AVURLAsset alloc] initWithURL:url options:nil];
     NSImage *cover = nil;
 
     NSArray *metadata = [asset commonMetadata];
-    NSDebugLLog(@"gwcomp", @"[Player]   AVAsset commonMetadata count: %tu", [metadata count]);
+    NSLog( @"[Player]   AVAsset commonMetadata count: %tu", [metadata count]);
 
     for (AVMetadataItem *item in metadata) {
         id key = [item key];
         NSString *keyDesc = [key isKindOfClass:[NSString class]] ? (NSString *)key : [key description];
-        NSDebugLLog(@"gwcomp", @"[Player]   metadata item key=%@ valueClass=%@",
+        NSLog( @"[Player]   metadata item key=%@ valueClass=%@",
                     keyDesc, NSStringFromClass([[item value] class]));
 
         if ([key isKindOfClass:[NSString class]] &&
@@ -1789,18 +2068,18 @@
             id value = [item value];
             if ([value isKindOfClass:[NSData class]]) {
                 NSData *data = (NSData *)value;
-                NSDebugLLog(@"gwcomp", @"[Player]   artwork NSData length=%tu bytes", [data length]);
+                NSLog( @"[Player]   artwork NSData length=%tu bytes", [data length]);
 
                 cover = [[NSImage alloc] initWithData:data];
                 if (cover) {
-                    NSDebugLLog(@"gwcomp", @"[Player]   embedded artwork decoded OK (size=%@)",
+                    NSLog( @"[Player]   embedded artwork decoded OK (size=%@)",
                                 NSStringFromSize([cover size]));
                     [cover autorelease];
                 } else {
-                    NSDebugLLog(@"gwcomp", @"[Player]   embedded artwork data did not produce an NSImage");
+                    NSLog( @"[Player]   embedded artwork data did not produce an NSImage");
                 }
             } else {
-                NSDebugLLog(@"gwcomp", @"[Player]   artwork key found but value is %@, not NSData",
+                NSLog( @"[Player]   artwork key found but value is %@, not NSData",
                             NSStringFromClass([value class]));
             }
             break;  // only one artwork item expected
@@ -1808,7 +2087,7 @@
     }
 
     if (!cover) {
-        NSDebugLLog(@"gwcomp", @"[Player]   no artwork found via AVFoundation");
+        NSLog( @"[Player]   no artwork found via AVFoundation");
     }
 
     [asset release];
@@ -1822,7 +2101,7 @@
     NSInteger count = [playlist count];
     if (count == 0) return;
 
-    NSDebugLLog(@"gwcomp", @"[Player] loadCoverArtForAllPlaylistItems: %ld items", (long)count);
+    NSLog( @"[Player] loadCoverArtForAllPlaylistItems: %ld items", (long)count);
 
     // Collect paths that still need a cover
     NSMutableArray *pathsToExtract = [NSMutableArray array];
@@ -1908,17 +2187,22 @@
 
 #pragma mark - Playlist
 
-- (void)addToPlaylist:(NSString *)filePath
+- (BOOL)addToPlaylist:(NSString *)filePath
 {
-    if (!filePath) return;
+    if (!filePath) return NO;
+    // Standardize path for consistent comparison, but skip URLs
+    if ([filePath rangeOfString:@"://"].location == NSNotFound) {
+        filePath = [filePath stringByStandardizingPath];
+    }
     for (NSString *existing in playlist) {
         if ([existing isEqualToString:filePath]) {
             currentIndex = (int)[playlist indexOfObject:filePath];
-            return;
+            return NO;
         }
     }
     [playlist addObject:filePath];
     currentIndex = (int)[playlist count] - 1;
+    return YES;
 }
 
 - (void)playFromPlaylistAtIndex:(int)index
@@ -1939,6 +2223,21 @@
 - (void)playbackTimerFired:(NSTimer *)timer
 {
     if (playbackState == PlayerPlaybackStateStopped) return;
+
+    if (_usingStreamPlayer) {
+        NSTimeInterval curSec = [[StreamPlayer sharedPlayer] currentTime];
+        NSTimeInterval durSec = [[StreamPlayer sharedPlayer] duration];
+        if (durSec > 0 && curSec >= 0) {
+            double pct = (curSec / durSec) * 100.0;
+            if (!isFullscreen) {
+                [timeSlider setDoubleValue:pct];
+            }
+            [currentTimeLabel setStringValue:[self formatTimeInterval:curSec]];
+            [totalTimeLabel setStringValue:[self formatTimeInterval:durSec]];
+        }
+        // End-of-track is handled by streamPlayerDidStop: delegate
+        return;
+    }
 
     if (avPlayer) {
         CMTime current = [avPlayer currentTime];
@@ -1994,7 +2293,14 @@
 
 - (void)updateDurationDisplay
 {
-    if (urlAsset) {
+    if (_usingStreamPlayer) {
+        NSTimeInterval dur = [[StreamPlayer sharedPlayer] duration];
+        if (dur > 0) {
+            [totalTimeLabel setStringValue:[self formatTimeInterval:dur]];
+        } else {
+            [totalTimeLabel setStringValue:@"--:--"];
+        }
+    } else if (urlAsset) {
         CMTime duration = [urlAsset duration];
         if (CMTimeGetSeconds(duration) > 0) {
             [totalTimeLabel setStringValue:[self formatTime:duration]];
@@ -2016,7 +2322,7 @@
 
 - (void)updateStatus:(NSString *)status
 {
-    NSDebugLLog(@"gwcomp", @"Player: %@", status);
+    NSLog( @"Player: %@", status);
 }
 
 - (void)showOpenPanel
@@ -2033,6 +2339,12 @@
     if ([panel runModal] == NSFileHandlingPanelOKButton) {
         NSArray *urls = [panel URLs];
         if ([urls count] == 0) return;
+
+        // Clear existing playlist and stop playback — Open replaces, not appends
+        [self stopPlayback];
+        [playlist removeAllObjects];
+        [flowView reloadData];
+        currentIndex = 0;
 
         // Collect all paths (files and directories)
         NSMutableArray *paths = [NSMutableArray arrayWithCapacity:[urls count]];
@@ -2100,8 +2412,9 @@
     BOOL wasPlaying = (playbackState != PlayerPlaybackStateStopped);
 
     // Add all valid files to the playlist (addToPlaylist: handles dedup)
+    NSUInteger addedCount = 0;
     for (NSString *file in validFiles) {
-        [self addToPlaylist:file];
+        if ([self addToPlaylist:file]) addedCount++;
     }
 
     // Load cover art for every playlist item immediately
@@ -2113,7 +2426,7 @@
     }
 
     [self updateStatus:[NSString stringWithFormat:@"Added %lu file(s) to playlist",
-        (unsigned long)[validFiles count]]];
+        (unsigned long)addedCount]];
 }
 
 - (NSArray *)scanFolderForMediaFiles:(NSString *)folderPath
@@ -2485,55 +2798,47 @@
 
 - (void)openRadioStream:(id)sender
 {
-    // Simple input dialog: use NSAlert with informative text, then prompt separately
-    NSAlert *alert = [[NSAlert alloc] init];
-    [alert setMessageText:@"Open Radio Stream"];
-    [alert setInformativeText:@"Enter a stream URL or station name in the field below,\nthen click Play or press Enter."];
-    [alert addButtonWithTitle:@"Play"];
-    [alert addButtonWithTitle:@"Cancel"];
+    NSString *urlString = [self _inputDialogWithTitle:@"Open Radio Stream"
+                                              message:@"Enter a stream URL or station name."
+                                          placeholder:@"http://stream.example.com:8000/stream"];
 
-    // Add a text input field to the alert's content view
-    NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 280, 22)];
-    [input setPlaceholderString:@"http://stream.example.com:8000/stream"];
-
-    NSView *cv = [[alert window] contentView];
-    NSRect cvFrame = [cv frame];
-    // Enlarge the content view to fit the input
-    cvFrame.size.height += 36;
-    [cv setFrame:cvFrame];
-    // Shift existing subviews up
-    for (NSView *sv in [cv subviews]) {
-        NSRect sf = [sv frame];
-        sf.origin.y += 36;
-        [sv setFrame:sf];
-    }
-    // Place input at bottom
-    [input setFrameOrigin:NSMakePoint(20, 10)];
-    [cv addSubview:input];
-    [[alert window] setInitialFirstResponder:input];
-
-    NSInteger result = [alert runModal];
-    if (result == NSAlertFirstButtonReturn) {
-        NSString *urlString = [[input stringValue]
-            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if ([urlString length] > 0) {
-            RadioStation *matchedStation = nil;
-            for (RadioStation *s in [[RadioManager sharedManager] stations]) {
-                if ([[s name] isEqualToString:urlString]) {
-                    matchedStation = s;
-                    break;
-                }
-            }
-            if (matchedStation) {
-                [self schedulePlayStation:matchedStation];
-            } else {
-                [[RadioManager sharedManager] playURL:urlString];
+    if ([urlString length] > 0) {
+        // Check if the URL looks like a web video platform URL instead of a radio stream
+        NSString *lower = [urlString lowercaseString];
+        BOOL isWebVideo = NO;
+        NSArray *webPlatforms = @[@"youtube.com", @"youtu.be", @"vimeo.com",
+                                   @"soundcloud.com", @"twitch.tv", @"dailymotion.com"];
+        for (NSString *domain in webPlatforms) {
+            if ([lower rangeOfString:domain].location != NSNotFound) {
+                isWebVideo = YES;
+                break;
             }
         }
-    }
 
-    [input release];
-    [alert release];
+        if (isWebVideo && _ytdlpAvailable) {
+            NSLog(@"[Player] openRadioStream - detected web video URL, routing to yt-dlp");
+            // Update status
+            [self updateStatus:@"Resolving URL via yt-dlp..."];
+            [progressIndicator setHidden:NO];
+            [progressIndicator startAnimation:self];
+            [_ytdlpBackend setFormatSpec:[PreferencesController selectedFormat]];
+            [_ytdlpBackend resolveURL:urlString];
+            return;
+        }
+
+        RadioStation *matchedStation = nil;
+        for (RadioStation *s in [[RadioManager sharedManager] stations]) {
+            if ([[s name] isEqualToString:urlString]) {
+                matchedStation = s;
+                break;
+            }
+        }
+        if (matchedStation) {
+            [self schedulePlayStation:matchedStation];
+        } else {
+            [[RadioManager sharedManager] playURL:urlString];
+        }
+    }
 }
 
 - (void)radioStop:(id)sender
@@ -2589,6 +2894,393 @@
     } else {
         [playButton setImage:[self iconPlay]];
     }
+}
+
+#pragma mark - Input Dialog Helper
+
+/**
+ * Build a proper NSPanel modal dialog with a text field.
+ *
+ * Unlike NSAlert hacks (which fail in GNUstep because [alert window]
+ * may not be available before runModal), this creates a dedicated
+ * panel that works reliably on macOS and GNUstep.
+ */
+- (NSString *)_inputDialogWithTitle:(NSString *)title
+                            message:(NSString *)message
+                        placeholder:(NSString *)placeholder
+{
+    CGFloat pw = 460.0;
+    CGFloat ph = 155.0;
+
+    NSPanel *panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, pw, ph)
+                                                styleMask:NSTitledWindowMask |
+                                                          NSClosableWindowMask
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:NO];
+    [panel setTitle:title ?: @"Input"];
+    [panel setFloatingPanel:YES];
+    [panel center];
+
+    NSView *cv = [panel contentView];
+    CGFloat contentWidth = pw - 2 * METRICS_CONTENT_SIDE_MARGIN;
+
+    // Message label
+    CGFloat labelY = ph - METRICS_CONTENT_TOP_MARGIN - 34;
+    NSTextField *msgLabel = [[[NSTextField alloc]
+        initWithFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, labelY, contentWidth, 34)] autorelease];
+    [msgLabel setStringValue:message ?: @""];
+    [msgLabel setBezeled:NO];
+    [msgLabel setDrawsBackground:NO];
+    [msgLabel setEditable:NO];
+    [msgLabel setSelectable:NO];
+    [msgLabel setFont:METRICS_FONT_SYSTEM_REGULAR_13];
+    [[msgLabel cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    [cv addSubview:msgLabel];
+
+    // Text input field
+    CGFloat inputY = labelY - METRICS_SPACE_16 - METRICS_TEXT_INPUT_FIELD_HEIGHT;
+    NSTextField *input = [[NSTextField alloc]
+        initWithFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, inputY, contentWidth,
+                                 METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+    [input setPlaceholderString:placeholder ?: @""];
+    [input setEditable:YES];
+    [input setSelectable:YES];
+    [cv addSubview:input];
+
+    // Buttons — default (OK) in lower-right corner, Cancel to its left per HIG
+    CGFloat buttonY = METRICS_CONTENT_BOTTOM_MARGIN;
+    CGFloat buttonW = METRICS_BUTTON_MIN_WIDTH;
+    CGFloat buttonH = METRICS_BUTTON_HEIGHT;
+
+    // OK button (rightmost — lower-right corner)
+    CGFloat okX = pw - METRICS_CONTENT_SIDE_MARGIN - buttonW;
+    NSButton *okButton = [[[NSButton alloc]
+        initWithFrame:NSMakeRect(okX, buttonY, buttonW, buttonH)] autorelease];
+    [okButton setTitle:@"OK"];
+    [okButton setBezelStyle:NSRoundedBezelStyle];
+    [okButton setKeyEquivalent:@"\r"];
+    [okButton setTag:NSOKButton];
+    [okButton setTarget:self];
+    [okButton setAction:@selector(_dismissInputDialog:)];
+    [cv addSubview:okButton];
+
+    // Cancel button (to the left of OK)
+    CGFloat cancelX = okX - METRICS_SPACE_12 - buttonW;
+    NSButton *cancelButton = [[[NSButton alloc]
+        initWithFrame:NSMakeRect(cancelX, buttonY, buttonW, buttonH)] autorelease];
+    [cancelButton setTitle:@"Cancel"];
+    [cancelButton setBezelStyle:NSRoundedBezelStyle];
+    [cancelButton setKeyEquivalent:@"\e"];
+    [cancelButton setTag:NSCancelButton];
+    [cancelButton setTarget:self];
+    [cancelButton setAction:@selector(_dismissInputDialog:)];
+    [cv addSubview:cancelButton];
+
+    [panel setInitialFirstResponder:input];
+    _modalInputResult = nil;
+    _modalInputPanel = panel;
+    _modalInputField = input;
+
+    [NSApp runModalForWindow:panel];
+
+    NSString *result = [_modalInputResult autorelease];
+    _modalInputResult = nil;
+    _modalInputPanel = nil;
+    _modalInputField = nil;
+
+    [panel orderOut:self];
+    [panel release];
+    [input release];
+
+    return result;
+}
+
+- (void)_dismissInputDialog:(id)sender
+{
+    NSString *value = nil;
+    if ([sender tag] == NSOKButton && _modalInputField) {
+        value = [[_modalInputField stringValue]
+            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([value length] == 0) value = nil;
+    }
+    [_modalInputResult release];
+    _modalInputResult = [value retain];
+    _modalInputField = nil;
+    [NSApp stopModal];
+}
+
+#pragma mark - Open URL / yt-dlp
+
+- (IBAction)openPreferences:(id)sender
+{
+    if (!_preferencesController) {
+        _preferencesController = [[PreferencesController alloc] init];
+    }
+    [_preferencesController showPreferencesWindow:mainWindow];
+}
+
+- (void)playStreamURL:(NSString *)url withTitle:(NSString *)title
+{
+    NSLog( @"[Player] playStreamURL: %@", url);
+    NSLog( @"[Player]   title: %@", title);
+
+    // Switch to local mode (exit radio if active)
+    if (playerMode == PlayerModeRadio) {
+        [self exitRadioMode];
+    }
+
+    [self stopPlayback];
+
+    // Set the title display
+    if ([title length] > 0) {
+        NSString *displayTitle = [title stringByDeletingPathExtension];
+        [titleLabel setStringValue:displayTitle];
+        [artistLabel setStringValue:@""];
+        [albumLabel setStringValue:@""];
+        [detailsLabel setStringValue:@"Streaming URL"];
+        [mainWindow setTitle:[NSString stringWithFormat:@"Player - %@", displayTitle]];
+        [_pendingStreamTitle release];
+        _pendingStreamTitle = [title retain];
+    } else {
+        [titleLabel setStringValue:@"Streaming..."];
+        [artistLabel setStringValue:@""];
+        [albumLabel setStringValue:@""];
+        [detailsLabel setStringValue:@"Streaming URL"];
+        [mainWindow setTitle:@"Player - Streaming"];
+    }
+
+    // Load the stream URL in the current audio player
+    NSURL *streamURL = [NSURL URLWithString:url];
+    if (!streamURL) {
+        [self updateStatus:@"Invalid stream URL"];
+        return;
+    }
+
+    // Show flowView (or cleared videoView) before StreamPlayer.play fires
+    // the delegate callback. stopPlayback already set this, but be explicit
+    // so the initial state is correct before the delegate runs.
+    [_videoRenderView setFrameData:nil width:0 height:0];
+    [videoView setHidden:YES];
+    [flowView setHidden:NO];
+
+    // For stream URLs (non-file scheme), use StreamPlayer (FFmpeg + libao)
+    // which handles Opus, AAC, MP3, and other streaming codecs properly.
+    if (![[streamURL scheme] isEqualToString:@"file"]) {
+        NSLog(@"[Player] stream URL detected, using StreamPlayer (FFmpeg)");
+        @try {
+            [[StreamPlayer sharedPlayer] stop];
+            [[StreamPlayer sharedPlayer] close];
+            [[StreamPlayer sharedPlayer] setDelegate:self];
+            NSError *error = nil;
+            if ([[StreamPlayer sharedPlayer] openURL:url error:&error]) {
+                [[StreamPlayer sharedPlayer] play];
+            } else {
+                [self updateStatus:[NSString stringWithFormat:@"Stream failed: %@",
+                                   [error localizedDescription]]];
+                return;
+            }
+        } @catch (NSException *exception) {
+            NSLog(@"[Player] Exception in StreamPlayer: %@", [exception reason]);
+            [self updateStatus:[NSString stringWithFormat:@"Stream failed: %@",
+                               [exception reason]]];
+            return;
+        }
+    } else {
+        @try {
+            // Try loading via AVAudioPlayer (works for direct media URLs)
+            NSError *error = nil;
+            audioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:streamURL error:&error];
+
+            if (!audioPlayer && error) {
+                // Fallback: use AVPlayer for streaming (HLS, etc.)
+                NSLog( @"[Player] AVAudioPlayer failed, trying AVPlayer: %@",
+                           [error localizedDescription]);
+                [self _setupAVPlayerWithURL:streamURL];
+            } else if (audioPlayer) {
+                [audioPlayer setVolume:localVolume];
+            }
+        } @catch (NSException *exception) {
+            NSLog( @"[Player] Exception loading stream: %@", [exception reason]);
+            [self updateStatus:[NSString stringWithFormat:@"Failed to load stream: %@",
+                               [exception reason]]];
+            return;
+        }
+    }
+
+    // Add to playlist as a special entry
+    NSString *playlistEntry = url;
+    if ([_pendingStreamTitle length] > 0) {
+        playlistEntry = [NSString stringWithFormat:@"%@|%@", url, _pendingStreamTitle];
+    }
+    [self addToPlaylist:playlistEntry];
+
+    [playButton setEnabled:YES];
+    [stopButton setEnabled:YES];
+
+    [self play];
+    [self updateStatus:@"Streaming..."];
+}
+
+/**
+ * Set up AVPlayer for streaming a URL.
+ * Releases any existing AVPlayer/AVPlayerItem/AVURLAsset first.
+ */
+- (void)_setupAVPlayerWithURL:(NSURL *)streamURL
+{
+    if (avPlayer) {
+        [avPlayer release];
+        avPlayer = nil;
+    }
+    if (playerItem) {
+        [playerItem release];
+        playerItem = nil;
+    }
+    if (urlAsset) {
+        [urlAsset release];
+        urlAsset = nil;
+    }
+
+    urlAsset = [[AVURLAsset alloc] initWithURL:streamURL options:nil];
+    playerItem = [[AVPlayerItem alloc] initWithAsset:urlAsset];
+    avPlayer = [[AVPlayer alloc] initWithPlayerItem:playerItem];
+    [avPlayer setActionAtItemEnd:AVPlayerActionAtItemEndPause];
+
+    // Log player/item status
+    NSLog(@"[Player] AVPlayerItem status: %ld", (long)[playerItem status]);
+    NSLog(@"[Player] AVPlayer status: %ld", (long)[avPlayer status]);
+    if ([playerItem error]) {
+        NSLog(@"[Player] AVPlayerItem error: %@", [[playerItem error] localizedDescription]);
+    }
+}
+
+- (void)checkYTDLPAvailability
+{
+    NSLog(@"[Player] checkYTDLPAvailability - trying default path: %@",
+                [_ytdlpBackend ytdlpPath]);
+    _ytdlpAvailable = [_ytdlpBackend checkAvailability];
+    if (!_ytdlpAvailable) {
+        // Also check the user-configured path
+        NSString *configuredPath = [PreferencesController ytdlpPath];
+        NSLog(@"[Player] checkYTDLPAvailability - default not found, trying configured: %@",
+                    configuredPath);
+        if (![configuredPath isEqualToString:@"yt-dlp"]) {
+            [_ytdlpBackend setYtdlpPath:configuredPath];
+            _ytdlpAvailable = [_ytdlpBackend checkAvailability];
+        }
+    }
+    NSLog(@"[Player] checkYTDLPAvailability - result: %@",
+                _ytdlpAvailable ? @"available" : @"not available");
+}
+
+#pragma mark - YTDLPBackendDelegate
+
+- (void)ytdlpBackend:(YTDLPBackend *)backend didResolveURL:(NSString *)streamURL
+              title:(NSString *)title thumbnail:(NSString *)thumbnailURL
+            duration:(NSTimeInterval)duration
+{
+    NSLog( @"[Player] ytdlpBackend:didResolveURL:");
+    NSLog( @"[Player]   streamURL: %@", streamURL);
+    NSLog( @"[Player]   title: %@", title);
+    NSLog( @"[Player]   thumbnail: %@", thumbnailURL);
+    NSLog( @"[Player]   duration: %.1fs", duration);
+
+    [progressIndicator setHidden:YES];
+    [progressIndicator stopAnimation:self];
+
+    if ([streamURL length] > 0) {
+        NSString *displayTitle = title;
+        if ([displayTitle length] == 0) {
+            displayTitle = @"Streaming URL";
+        }
+        [self playStreamURL:streamURL withTitle:displayTitle];
+    }
+}
+
+- (void)ytdlpBackend:(YTDLPBackend *)backend didFailWithError:(NSString *)error
+{
+    NSLog( @"[Player] ytdlpBackend:didFailWithError: %@", error);
+
+    [progressIndicator setHidden:YES];
+    [progressIndicator stopAnimation:self];
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:@"Failed to Resolve URL"];
+    [alert setInformativeText:[NSString stringWithFormat:
+        @"yt-dlp was unable to resolve the URL:\n\n%@", error]];
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+    [alert release];
+
+    [self updateStatus:@"URL resolution failed"];
+}
+
+- (void)ytdlpBackendDidCancel:(YTDLPBackend *)backend
+{
+    NSLog( @"[Player] ytdlpBackendDidCancel");
+
+    [progressIndicator setHidden:YES];
+    [progressIndicator stopAnimation:self];
+    [self updateStatus:@"URL resolution cancelled"];
+}
+
+#pragma mark - StreamPlayerDelegate
+
+- (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
+{
+    NSLog(@"[Player] StreamPlayer started playing");
+    [playButton setEnabled:YES];
+    [stopButton setEnabled:YES];
+    [self updateStatus:@"Streaming..."];
+}
+
+- (void)streamPlayerDidStop:(StreamPlayer *)player
+{
+    NSLog(@"[Player] StreamPlayer stopped");
+
+    // Auto-advance for local video files when the stream ends naturally
+    if (playerMode == PlayerModeLocal && _usingStreamPlayer) {
+        [self stopPlayback];
+        if ([playlist count] > 1) {
+            if (repeatEnabled || shuffleEnabled) {
+                [self nextTrack:self];
+            } else {
+                int nextIdx = currentIndex + 1;
+                if (nextIdx < (int)[playlist count]) {
+                    [self playFromPlaylistAtIndex:nextIdx];
+                }
+            }
+        } else if (repeatEnabled && [playlist count] == 1) {
+            [self playFromPlaylistAtIndex:0];
+        }
+    }
+}
+
+- (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
+{
+    NSLog(@"[Player] StreamPlayer error: %@", [error localizedDescription]);
+    [self updateStatus:[NSString stringWithFormat:@"Stream error: %@",
+                       [error localizedDescription]]];
+}
+
+- (void)streamPlayer:(StreamPlayer *)player didDiscoverVideoWithWidth:(int)width
+              height:(int)height
+{
+    NSLog(@"[Player] StreamPlayer discovered video: %dx%d", width, height);
+    [videoView setHidden:NO];
+    [flowView setHidden:YES];
+}
+
+- (void)streamPlayer:(StreamPlayer *)player didDecodeVideoFrameData:(NSData *)rgbData
+              width:(int)width height:(int)height
+{
+    NSLog(@"[Player] video frame received: %dx%d, dataLen=%tu, videoView.hidden=%d videoView.frame=%@",
+          width, height, [rgbData length],
+          [videoView isHidden], NSStringFromRect([videoView frame]));
+    [_videoRenderView setFrameData:rgbData width:width height:height];
+
+    // Force immediate synchronous drawing on the video render view
+    [_videoRenderView display];
+    [[videoView window] flushWindow];
 }
 
 #pragma mark - RadioManagerDelegate
