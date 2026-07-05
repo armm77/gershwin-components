@@ -621,7 +621,7 @@
     NSString *identifier = [tableColumn identifier];
     
     if ([identifier isEqual:@"name"]) {
-        return [service name];
+        return [NSString stringWithFormat:@"%@ (%@)", [service name], [service typeString]];
     } else if ([identifier isEqual:@"type"]) {
         return [service typeString];
     } else if ([identifier isEqual:@"host"]) {
