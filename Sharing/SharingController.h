@@ -24,6 +24,7 @@
     NSButton *sftpCheckbox;
     NSButton *afpCheckbox;
     NSButton *smbCheckbox;
+    NSButton *webCheckbox;
     
     // Status labels
     NSTextField *sshStatusLabel;
@@ -31,6 +32,7 @@
     NSTextField *sftpStatusLabel;
     NSTextField *afpStatusLabel;
     NSTextField *smbStatusLabel;
+    NSTextField *webStatusLabel;
     
     // Information displays
     NSTextField *sshInfoLabel;
@@ -38,6 +40,7 @@
     NSTextField *sftpInfoLabel;
     NSTextField *afpInfoLabel;
     NSTextField *smbInfoLabel;
+    NSTextField *webInfoLabel;
     
     // mDNS status label
     NSTextField *mdnsStatusLabel;
@@ -48,6 +51,7 @@
     BOOL sftpEnabled;
     BOOL afpEnabled;
     BOOL smbEnabled;
+    BOOL webEnabled;
 
     // Installation state
     BOOL sshInstalled;
@@ -55,6 +59,7 @@
     BOOL sftpInstalled;
     BOOL afpInstalled;
     BOOL smbInstalled;
+    BOOL webInstalled;
 
     NSString *currentHostname;
     
@@ -76,6 +81,7 @@
 - (void)toggleSFTP:(id)sender;
 - (void)toggleAFP:(id)sender;
 - (void)toggleSMB:(id)sender;
+- (void)toggleWeb:(id)sender;
 - (void)hostnameDidChange:(NSNotification *)notification;
 
 @end

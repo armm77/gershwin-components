@@ -42,6 +42,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         sftpEnabled = NO;
         afpEnabled = NO;
         smbEnabled = NO;
+        webEnabled = NO;
         currentHostname = nil;
         
         // Find helper path
@@ -95,16 +96,19 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     [sftpCheckbox release];
     [afpCheckbox release];
     [smbCheckbox release];
+    [webCheckbox release];
     [sshStatusLabel release];
     [vncStatusLabel release];
     [sftpStatusLabel release];
     [afpStatusLabel release];
     [smbStatusLabel release];
+    [webStatusLabel release];
     [sshInfoLabel release];
     [vncInfoLabel release];
     [sftpInfoLabel release];
     [afpInfoLabel release];
     [smbInfoLabel release];
+    [webInfoLabel release];
     [mdnsStatusLabel release];
     [currentHostname release];
     [helperPath release];
@@ -323,6 +327,26 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (BOOL)getSMBInstalled
 {
     NSString *output = [self runHelper:@"smb-installed"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"installed"];
+    }
+    return YES;
+}
+
+- (BOOL)getWebStatus
+{
+    NSString *output = [self runHelper:@"web-status"];
+    if (output) {
+        NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return [trimmed isEqualToString:@"running"];
+    }
+    return NO;
+}
+
+- (BOOL)getWebInstalled
+{
+    NSString *output = [self runHelper:@"web-installed"];
     if (output) {
         NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         return [trimmed isEqualToString:@"installed"];
@@ -685,6 +709,57 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     }
 }
 
+- (void)toggleWeb:(id)sender
+{
+    BOOL shouldEnable = [webCheckbox state] == NSOnState;
+    NSString *command = shouldEnable ? @"web-start" : @"web-stop";
+
+    NSDebugLog(@"SharingController: %@ Web Server", shouldEnable ? @"Starting" : @"Stopping");
+
+    BOOL success = [self runHelperWithSudo:command];
+
+    if (success) {
+        webEnabled = shouldEnable;
+
+        if (shouldEnable) {
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable]) {
+                BOOL announced = [mgr announceService:GSServiceTypeWeb
+                                                                     port:80
+                                                                txtRecord:nil];
+                if (announced) {
+                    NSDebugLog(@"SharingController: Web Server service announced via mDNS");
+                } else {
+                    NSDebugLog(@"SharingController: Failed to announce Web Server service via mDNS");
+                    NSRunAlertPanel(@"Web Server Warning",
+                                   @"Web Server started but could not be announced on the network.",
+                                   @"OK", nil, nil);
+                }
+            }
+        } else {
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable]) {
+                [mgr unannounceService:GSServiceTypeWeb];
+                NSDebugLog(@"SharingController: Web Server service unannounced from mDNS");
+            }
+        }
+
+        [self refreshStatus:nil];
+        NSDebugLog(@"SharingController: Web Server %@", shouldEnable ? @"started" : @"stopped");
+    } else {
+        [webCheckbox setState:webEnabled ? NSOnState : NSOffState];
+        NSRunAlertPanel(@"Web Server Error",
+                       @"Failed to modify Web Server service.\n\n"
+                       @"Web Server requires nginx to be installed.\n"
+                       @"Please install nginx using your system's package manager:\n"
+                       @"• Debian/Ubuntu: sudo apt-get install nginx\n"
+                       @"• Fedora/RHEL: sudo dnf install nginx\n"
+                       @"• FreeBSD: sudo pkg install nginx\n"
+                       @"• Arch: sudo pacman -S nginx",
+                       @"OK", nil, nil);
+    }
+}
+
 - (void)refreshStatus:(id)sender
 {
     NSDebugLog(@"SharingController: Refreshing service status");
@@ -710,30 +785,32 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         BOOL sftp = [self getSFTPStatus];
         BOOL afp  = [self getAFPStatus];
         BOOL smb  = [self getSMBStatus];
+        BOOL web  = [self getWebStatus];
         // Also query installation state for each service
         BOOL isSshInstalled  = [self getSSHInstalled];
         BOOL isVncInstalled  = [self getVNCInstalled];
         BOOL isSftpInstalled = [self getSFTPInstalled];
         BOOL isAfpInstalled  = [self getAFPInstalled];
         BOOL isSmbInstalled  = [self getSMBInstalled];
+        BOOL isWebInstalled  = [self getWebInstalled];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             isRefreshingStatus = NO;
             [self updateUIWithHostname:hostname
-                                   ssh:ssh vnc:vnc sftp:sftp afp:afp smb:smb
+                                   ssh:ssh vnc:vnc sftp:sftp afp:afp smb:smb web:web
                           sshInstalled:isSshInstalled vncInstalled:isVncInstalled
                          sftpInstalled:isSftpInstalled afpInstalled:isAfpInstalled
-                          smbInstalled:isSmbInstalled];
+                          smbInstalled:isSmbInstalled webInstalled:isWebInstalled];
         });
     });
 }
 
 - (void)updateUIWithHostname:(NSString *)hostname
-                         ssh:(BOOL)ssh vnc:(BOOL)vnc sftp:(BOOL)sftp
-                         afp:(BOOL)afp smb:(BOOL)smb
-                sshInstalled:(BOOL)isSshInstalled vncInstalled:(BOOL)isVncInstalled
-               sftpInstalled:(BOOL)isSftpInstalled afpInstalled:(BOOL)isAfpInstalled
-                smbInstalled:(BOOL)isSmbInstalled
+                          ssh:(BOOL)ssh vnc:(BOOL)vnc sftp:(BOOL)sftp
+                          afp:(BOOL)afp smb:(BOOL)smb web:(BOOL)web
+                 sshInstalled:(BOOL)isSshInstalled vncInstalled:(BOOL)isVncInstalled
+                sftpInstalled:(BOOL)isSftpInstalled afpInstalled:(BOOL)isAfpInstalled
+                 smbInstalled:(BOOL)isSmbInstalled webInstalled:(BOOL)isWebInstalled
 {
     // Safety check in case the pane was unselected while we were querying
     if (!hostnameField || !sshCheckbox) {
@@ -995,6 +1072,49 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
             }
         }
     }
+
+    // --- Web Server ---
+    if (!isWebInstalled) {
+        [webCheckbox setEnabled:NO];
+        [webCheckbox setState:NSOffState];
+        [webStatusLabel setStringValue:@"N/A"];
+        [webStatusLabel setTextColor:naColor];
+        [webInfoLabel setStringValue:@"Install nginx to enable Web Server."];
+        [webInfoLabel setHidden:NO];
+    } else {
+        [webCheckbox setEnabled:YES];
+        webEnabled = web;
+        [webCheckbox setState:webEnabled ? NSOnState : NSOffState];
+
+        if (webEnabled) {
+            [webStatusLabel setStringValue:@"On"];
+            [webStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
+
+            NSString *info = [NSString stringWithFormat:@"Web Server available at: http://%@", serviceAddress];
+            [webInfoLabel setStringValue:info];
+            [webInfoLabel setHidden:NO];
+
+            // Ensure mDNS announcement is active
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                ![mgr isServiceAnnounced:GSServiceTypeWeb]) {
+                [mgr announceService:GSServiceTypeWeb port:80 txtRecord:nil];
+                NSDebugLog(@"SharingController: Re-announced Web Server service via mDNS");
+            }
+        } else {
+            [webStatusLabel setStringValue:@"Off"];
+            [webStatusLabel setTextColor:[NSColor grayColor]];
+            [webInfoLabel setHidden:YES];
+
+            // Ensure mDNS announcement is stopped
+            GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
+            if (mgr && [mgr isAvailable] &&
+                [mgr isServiceAnnounced:GSServiceTypeWeb]) {
+                [mgr unannounceService:GSServiceTypeWeb];
+                NSDebugLog(@"SharingController: Unannounced Web Server service from mDNS");
+            }
+        }
+    }
 }
 
 #pragma mark - UI Creation
@@ -1009,7 +1129,7 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     // - 8px between control and its label
     // - 20px between control groups
     
-    CGFloat viewHeight = 390;
+    CGFloat viewHeight = 433;
     NSView *mainView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 595, viewHeight)];
     [mainView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
@@ -1254,6 +1374,38 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     [vncInfoLabel setHidden:YES];
     [mainView addSubview:vncInfoLabel];
     
+    yPos -= serviceRowHeight;  // Move to next service row
+
+    // Web Server (nginx) Service
+    webCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(leftMargin, yPos - METRICS_RADIO_BUTTON_SIZE, 200, METRICS_RADIO_BUTTON_SIZE)];
+    [webCheckbox setTitle:@"Web Server (nginx)"];
+    [webCheckbox setButtonType:NSSwitchButton];
+    [webCheckbox setTarget:self];
+    [webCheckbox setAction:@selector(toggleWeb:)];
+    [webCheckbox setFont:[NSFont systemFontOfSize:13]];
+    [mainView addSubview:webCheckbox];
+
+    webStatusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(leftMargin + 200 + METRICS_SPACE_8, yPos - 17, 60, 17)];
+    [webStatusLabel setStringValue:@"Off"];
+    [webStatusLabel setBezeled:NO];
+    [webStatusLabel setDrawsBackground:NO];
+    [webStatusLabel setEditable:NO];
+    [webStatusLabel setSelectable:NO];
+    [webStatusLabel setFont:[NSFont boldSystemFontOfSize:13]];
+    [webStatusLabel setTextColor:[NSColor grayColor]];
+    [mainView addSubview:webStatusLabel];
+
+    webInfoLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(leftMargin + METRICS_SPACE_16, yPos - METRICS_RADIO_BUTTON_SIZE - 17, width - METRICS_SPACE_16, 17)];
+    [webInfoLabel setStringValue:@""];
+    [webInfoLabel setBezeled:NO];
+    [webInfoLabel setDrawsBackground:NO];
+    [webInfoLabel setEditable:NO];
+    [webInfoLabel setSelectable:YES];
+    [webInfoLabel setFont:[NSFont systemFontOfSize:11]];
+    [webInfoLabel setTextColor:[NSColor darkGrayColor]];
+    [webInfoLabel setHidden:YES];
+    [mainView addSubview:webInfoLabel];
+
     yPos -= 17 + METRICS_SPACE_20;  // 20px gap between control groups
     
     // mDNS Status Section

@@ -982,6 +982,116 @@ static void cmd_smb_stop(void)
     exit(0);
 }
 
+/* Web Server (nginx) status */
+static void cmd_web_status(void)
+{
+#ifdef PLATFORM_LINUX
+    if (check_service_running("nginx.service") ||
+        check_service_running("nginx") ||
+        (system("pgrep -x nginx >/dev/null 2>&1") == 0)) {
+        printf("running\n");
+    } else {
+        printf("stopped\n");
+    }
+#else
+    if (check_service_running("nginx") ||
+        (system("pgrep -x nginx >/dev/null 2>&1") == 0)) {
+        printf("running\n");
+    } else {
+        printf("stopped\n");
+    }
+#endif
+    exit(0);
+}
+
+/* Web Server installed */
+static void cmd_web_installed(void)
+{
+    if (binary_exists("nginx")) {
+        printf("installed\n");
+    } else {
+        printf("not-installed\n");
+    }
+    exit(0);
+}
+
+/* Start nginx */
+static void cmd_web_start(void)
+{
+    syslog(LOG_INFO, "sharing-helper: Starting nginx");
+
+    if (!binary_exists("nginx")) {
+        fprintf(stderr, "nginx is not installed\n");
+        syslog(LOG_ERR, "sharing-helper: nginx not found");
+        exit(1);
+    }
+
+#ifdef PLATFORM_LINUX
+    if (system("which systemctl >/dev/null 2>&1") == 0) {
+        if (system("systemctl start nginx.service >/dev/null 2>&1") == 0) {
+            system("systemctl enable nginx.service >/dev/null 2>&1");
+            goto web_started;
+        }
+    }
+    if (system("service nginx start >/dev/null 2>&1") == 0) {
+        goto web_started;
+    }
+    if (system("test -x /etc/init.d/nginx && /etc/init.d/nginx start >/dev/null 2>&1") == 0) {
+        goto web_started;
+    }
+    if (system("nginx >/dev/null 2>&1") == 0) {
+        goto web_started;
+    }
+    fprintf(stderr, "Failed to start nginx\n");
+    syslog(LOG_ERR, "sharing-helper: Failed to start nginx");
+    exit(1);
+#elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD)
+    system("sysrc nginx_enable=YES");
+    if (system("service nginx start") == 0) {
+        goto web_started;
+    }
+    fprintf(stderr, "Failed to start nginx\n");
+    syslog(LOG_ERR, "sharing-helper: Failed to start nginx");
+    exit(1);
+#elif defined(PLATFORM_OPENBSD)
+    system("rcctl enable nginx");
+    if (system("rcctl start nginx") == 0) {
+        goto web_started;
+    }
+    fprintf(stderr, "Failed to start nginx\n");
+    syslog(LOG_ERR, "sharing-helper: Failed to start nginx");
+    exit(1);
+#endif
+
+web_started:
+    syslog(LOG_INFO, "sharing-helper: nginx started");
+    exit(0);
+}
+
+/* Stop nginx */
+static void cmd_web_stop(void)
+{
+    syslog(LOG_INFO, "sharing-helper: Stopping nginx");
+
+#ifdef PLATFORM_LINUX
+    if (system("which systemctl >/dev/null 2>&1") == 0) {
+        system("systemctl stop nginx.service >/dev/null 2>&1");
+    }
+    system("service nginx stop >/dev/null 2>&1");
+    system("test -x /etc/init.d/nginx && /etc/init.d/nginx stop >/dev/null 2>&1");
+    system("pkill -x nginx >/dev/null 2>&1");
+#elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD)
+    system("service nginx stop");
+    system("pkill -x nginx >/dev/null 2>&1");
+#elif defined(PLATFORM_OPENBSD)
+    system("rcctl stop nginx");
+    system("pkill -x nginx >/dev/null 2>&1");
+#endif
+
+    syslog(LOG_INFO, "sharing-helper: nginx stopped");
+    exit(0);
+}
+
 /* Usage */
 static void usage(const char *progname)
 {
@@ -1009,6 +1119,10 @@ static void usage(const char *progname)
     fprintf(stderr, "  vnc-installed         Check if VNC server is installed\n");
     fprintf(stderr, "  vnc-start             Start VNC server\n");
     fprintf(stderr, "  vnc-stop              Stop VNC server\n");
+    fprintf(stderr, "  web-status            Check Web Server (nginx) status\n");
+    fprintf(stderr, "  web-installed         Check if nginx is installed\n");
+    fprintf(stderr, "  web-start             Start Web Server (nginx)\n");
+    fprintf(stderr, "  web-stop              Stop Web Server (nginx)\n");
     exit(1);
 }
 
@@ -1045,6 +1159,10 @@ int main(int argc, char *argv[])
         cmd_vnc_status();
     } else if (strcmp(cmd, "vnc-installed") == 0) {
         cmd_vnc_installed();
+    } else if (strcmp(cmd, "web-status") == 0) {
+        cmd_web_status();
+    } else if (strcmp(cmd, "web-installed") == 0) {
+        cmd_web_installed();
     }
     
     /* Commands that require root */
@@ -1081,6 +1199,10 @@ int main(int argc, char *argv[])
         cmd_vnc_start();
     } else if (strcmp(cmd, "vnc-stop") == 0) {
         cmd_vnc_stop();
+    } else if (strcmp(cmd, "web-start") == 0) {
+        cmd_web_start();
+    } else if (strcmp(cmd, "web-stop") == 0) {
+        cmd_web_stop();
     } else {
         fprintf(stderr, "Error: Unknown command: %s\n", cmd);
         usage(argv[0]);

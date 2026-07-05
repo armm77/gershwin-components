@@ -212,6 +212,8 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
             return @"_smb._tcp.";
         case GSServiceTypeWebDAV:
             return @"_webdav._tcp.";
+        case GSServiceTypeWeb:
+            return @"_http._tcp.";
         default:
             return nil;
     }
@@ -231,6 +233,8 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
             return 445;
         case GSServiceTypeWebDAV:
             return 8080;
+        case GSServiceTypeWeb:
+            return 80;
         default:
             return 0;
     }
