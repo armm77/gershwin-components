@@ -16,6 +16,7 @@ NSArray<NSString *> *CLMAvailableRepositories(void)
             @"https://api.github.com/repos/gershwin-desktop/gershwin-on-ghostbsd/releases",
             @"https://api.github.com/repos/gershwin-desktop/gershwin-on-debian/releases",
             @"https://api.github.com/repos/gershwin-desktop/gershwin-on-arch/releases",
+            @"https://api.github.com/repos/pkgdemon/gershwin-on-nextbsd/releases",
             @"https://api.github.com/repos/ventoy/Ventoy/releases",
         ];
     });

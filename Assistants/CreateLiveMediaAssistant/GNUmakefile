@@ -1,6 +1,7 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_SYSTEM_APPS := $(GNUSTEP_SYSTEM_APPS)/Utilities
+GNUSTEP_LOCAL_APPS := $(GNUSTEP_LOCAL_APPS)/Utilities
 
 # Application information
 APP_NAME = CreateLiveMediaAssistant
@@ -25,24 +26,21 @@ CreateLiveMediaAssistant_RESOURCE_FILES = \
 	Resources/Create_Live_Media.svg \
 	Resources/bgusb.png \
 	Resources/usbsuccess.svg \
-	Resources/en.lproj/Welcome.txt \
-	Resources/en.lproj/ReadMe.txt \
-	Resources/en.lproj/License.txt \
 	Resources/en.lproj/Localizable.strings \
-	Resources/de.lproj/Welcome.txt \
-	Resources/de.lproj/ReadMe.txt \
-	Resources/de.lproj/License.txt \
 	Resources/de.lproj/Localizable.strings
 
 # Required frameworks and libraries - use GNUstep naming (copy from working assistant)
 CreateLiveMediaAssistant_GUI_LIBS += -lgnustep-gui -lgnustep-base
 
 # Compiler and linker flags - embed framework in bundle with proper FreeBSD rpath
-CreateLiveMediaAssistant_CPPFLAGS += -Wall -Wextra -fobjc-arc -Werror -O2 -I$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1/Headers
+CreateLiveMediaAssistant_CPPFLAGS += -Wall -Wextra -fobjc-arc -Werror -Wno-unused-parameter -O2 -I$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1/Headers
 CreateLiveMediaAssistant_LDFLAGS += -L$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1 -lGSAssistantFramework -Wl,-rpath,'$$ORIGIN/Frameworks/GSAssistantFramework.framework/Versions/1'
 CreateLiveMediaAssistant_LDFLAGS += -ldispatch
 
 include $(GNUSTEP_MAKEFILES)/application.make
+
+before-install::
+	mkdir -p $(GNUSTEP_APPS)
 
 # Copy framework into app bundle after building
 after-all::
