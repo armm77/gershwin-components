@@ -429,37 +429,25 @@ id menu_drawRectWithoutBottomLine(id self, SEL cmd __attribute__((unused)), NSRe
         NSDebugLLog(@"gwcomp", @"MenuApplication: KeyDown event, key window: %@, characters: %@", 
               keyWin, [event characters]);
 
-        // If Action Search is visible, route KeyDown events to it first to make sure
-        // typing, arrows and escape are handled immediately (covers various WMs).
+        // If Action Search is visible, route KeyDown events to the search panel
         ActionSearchController *search = [ActionSearchController sharedController];
         if ([search.searchPanel isVisible]) {
-            // Reassert application activation and first-responder on each key event to
-            // handle window-manager focus races where the panel appears but does not
-            // receive keyboard input until clicked.
             [NSApp activateIgnoringOtherApps:YES];
             [search.searchPanel makeKeyWindow];
             [search.searchPanel makeFirstResponder:search.searchField];
-            NSDebugLLog(@"gwcomp", @"MenuApplication: Ensured focus on ActionSearchPanel before routing key");
+            NSDebugLLog(@"gwcomp", @"MenuApplication: Ensured focus on search field before routing key");
             [search.searchPanel sendEvent:event];
             return;
         }
 
-        // If there is no key window, try to find an ActionSearchPanel among windows as fallback
         if (!keyWin) {
-            for (NSWindow *window in [self windows]) {
-                if ([window isVisible] && [[window className] isEqualToString:@"ActionSearchPanel"]) {
-                    NSDebugLLog(@"gwcomp", @"MenuApplication: Routing KeyDown to ActionSearchPanel (found by class)");
-                    [window sendEvent:event];
-                    return;
-                }
-            }
         } else if (keyWin != [event window]) {
             NSDebugLLog(@"gwcomp", @"MenuApplication: Forwarding KeyDown to key window");
             [keyWin sendEvent:event];
             return;
         }
     } else if (eventType == NSLeftMouseDown || eventType == NSRightMouseDown) {
-        // If the action search panel is visible and the click is outside it and not in an NSMenu, close the popup
+        // If the search panel is visible and the click is outside it and not in an NSMenu, close the popup
         ActionSearchController *search = [ActionSearchController sharedController];
         if ([search.searchPanel isVisible]) {
             NSWindow *evtWin = [event window];

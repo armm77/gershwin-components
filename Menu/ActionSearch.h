@@ -33,13 +33,10 @@
 
 @property (nonatomic, strong) NSPanel *searchPanel;
 @property (nonatomic, strong) NSTextField *searchField;
-@property (nonatomic, strong) NSMenu *resultsMenu; // legacy (kept for compatibility, unused)
-@property (nonatomic, strong) NSPanel *resultsPanel;
-@property (nonatomic, strong) NSTableView *resultsTable;
+@property (nonatomic, strong) NSMenu *resultsMenu;
 @property (nonatomic, strong) NSMutableArray *allMenuItems;
 @property (nonatomic, strong) NSMutableArray *filteredResults;
 @property (nonatomic, weak) AppMenuWidget *appMenuWidget;
-@property (nonatomic, assign) NSPoint popupLocation;
 
 + (instancetype)sharedController;
 
@@ -63,6 +60,10 @@
  */
 - (void)toggleSearchPopupAtPoint:(NSPoint)point;
 
+/**
+ * Whether the search field is currently visible in the menu bar
+ */
+- (BOOL)isSearchVisible;
 
 /**
  * Collect all menu items from the current application menu
