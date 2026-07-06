@@ -150,7 +150,9 @@ progress_cb(void *userdata, curl_off_t dltotal, curl_off_t dlnow,
     }
 
     // Get actual content-length for verification
-    curl_easy_getinfo(_curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &_totalBytes);
+    curl_off_t cl;
+    curl_easy_getinfo(_curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &cl);
+    _totalBytes = (int64_t)cl;
     _totalBytes = MAX(_totalBytes, _receivedBytes);
 
     [self _finishWithError:nil];
