@@ -48,7 +48,9 @@ Menu_OBJC_FILES = \
 	AppMenuImporter.m \
 	WindowSwitchContext.m \
 	StatusItems/TimeDisplay/TimeDisplayProvider.m \
-	StatusItems/SystemMonitor/SystemMonitorProvider.m
+	StatusItems/SystemMonitor/SystemMonitorProvider.m \
+	SysfsBacklightBackend.m \
+	EvdevBrightnessKeySource.m
 
 # Header files
 Menu_HEADER_FILES = \
@@ -83,7 +85,11 @@ Menu_HEADER_FILES = \
 	StatusItemView.h \
 	WindowMonitor.h \
 	AppMenuImporter.h \
-	WindowSwitchContext.h
+	WindowSwitchContext.h \
+	BacklightBackend.h \
+	BrightnessKeySource.h \
+	SysfsBacklightBackend.h \
+	EvdevBrightnessKeySource.h
 
 # Resources
 Menu_RESOURCE_FILES = \

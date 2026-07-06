@@ -22,6 +22,10 @@
 #import "WindowMonitor.h"
 #import "AppMenuImporter.h"
 #import "MenuProfiler.h"
+#import "BacklightBackend.h"
+#import "BrightnessKeySource.h"
+#import "SysfsBacklightBackend.h"
+#import "EvdevBrightnessKeySource.h"
 #import "GNUstepGUI/GSTheme.h"
 #import <X11/Xlib.h>
 #import <X11/Xatom.h>
@@ -57,6 +61,10 @@
 @end
 
 @interface MenuController ()
+{
+    id<BacklightBackend> _backlightBackend;
+    id<BrightnessKeySource> _brightnessKeySource;
+}
 @end
 
 @implementation MenuController
@@ -460,6 +468,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     NSDebugLLog(@"gwcomp", @"MenuController: Application did finish launching");
     
     [self.menuBar orderFront:self];
+    [self setupBacklightControl];
     [self setupWindowMonitoring];
     
     NSDebugLLog(@"gwcomp", @"MenuController: Application setup complete");
@@ -579,6 +588,50 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     }
 }
 
+- (void)setupBacklightControl
+{
+    NSDebugLLog(@"gwcomp", @"MenuController: Setting up backlight control...");
+
+    _backlightBackend = [[SysfsBacklightBackend alloc] init];
+    _brightnessKeySource = [[EvdevBrightnessKeySource alloc] init];
+
+    if (![_backlightBackend respondsToSelector:@selector(current)] ||
+        ![_brightnessKeySource respondsToSelector:@selector(start:)]) {
+        NSDebugLLog(@"gwcomp", @"MenuController: Backlight control not available on this platform");
+        _backlightBackend = nil;
+        _brightnessKeySource = nil;
+        return;
+    }
+
+    int maxBrightness = [_backlightBackend maximum];
+    if (maxBrightness <= 0) {
+        NSDebugLLog(@"gwcomp", @"MenuController: No backlight device found, disabling backlight control");
+        _backlightBackend = nil;
+        _brightnessKeySource = nil;
+        return;
+    }
+
+    __weak id<BacklightBackend> weakBackend = _backlightBackend;
+    int step = maxBrightness / 20; // 5% per step
+
+    [_brightnessKeySource start:^(int delta) {
+        id<BacklightBackend> backend = weakBackend;
+        if (!backend) return;
+
+        int cur = [backend current];
+        int max = [backend maximum];
+        int next = cur + delta * step;
+
+        if (next < 0) next = 0;
+        if (next > max) next = max;
+
+        [backend set:next];
+    }];
+
+    NSDebugLLog(@"gwcomp", @"MenuController: Backlight control started (max=%d, step=%d)",
+          maxBrightness, step);
+}
+
 - (void)applicationWillTerminate:(NSNotification *)notification
 {
     NSDebugLLog(@"gwcomp", @"MenuController: Application will terminate");
@@ -593,6 +646,14 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         self.statusItemManager = nil;
     }
     
+    // Stop backlight control
+    NSDebugLLog(@"gwcomp", @"MenuController: Stopping backlight control...");
+    if ([_brightnessKeySource respondsToSelector:@selector(stop)]) {
+        [_brightnessKeySource stop];
+    }
+    _brightnessKeySource = nil;
+    _backlightBackend = nil;
+
     // Clean up global shortcuts
     NSDebugLLog(@"gwcomp", @"MenuController: Cleaning up global shortcuts...");
     [[X11ShortcutManager sharedManager] cleanup];
