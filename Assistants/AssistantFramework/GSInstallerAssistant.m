@@ -35,7 +35,7 @@
     NSWindow *window = [[NSWindow alloc] initWithContentRect:windowFrame
                                                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
                                                      backing:NSBackingStoreBuffered
-                                                       defer:NO];
+                                                       defer:YES];
     
     self = [super initWithWindow:window];
     if (self) {

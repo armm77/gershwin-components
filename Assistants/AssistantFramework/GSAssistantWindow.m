@@ -46,20 +46,16 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     if ((self = [super initWithFrame:frameRect])) {
         _fillColor = [NSColor colorWithCalibratedWhite:1.0 alpha:0.33];
         _strokeColor = [NSColor colorWithCalibratedWhite:0.72 alpha:1.0];
-        _cornerRadius = 0.0; // rectangular
+        _cornerRadius = 0.0;
     }
     return self;
 }
 - (void)drawRect:(NSRect)dirtyRect {
     [super drawRect:dirtyRect];
     NSRect bounds = self.bounds;
-
-    // Rectangular card, no shadow, subtle 1px border
     NSBezierPath *path = [NSBezierPath bezierPathWithRect:NSInsetRect(bounds, 0.5, 0.5)];
-
     [_fillColor setFill];
     [path fill];
-
     [_strokeColor setStroke];
     [path setLineWidth:1.0];
     [path stroke];
@@ -174,7 +170,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     NSWindow *window = [[NSWindow alloc] initWithContentRect:windowFrame
                                                    styleMask:styleMask
                                                      backing:NSBackingStoreBuffered
-                                                       defer:NO];
+                                                       defer:YES];
     
     self = [super initWithWindow:window];
     if (self) {
@@ -228,6 +224,9 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     // Make sure the application quits when window is closed
     [window setReleasedWhenClosed:YES];
     window.delegate = self;
+    
+    // Opaque window background so semi-transparent card views blend against it, not the desktop
+    [window setBackgroundColor:[NSColor windowBackgroundColor]];
     
     _contentView = [[NSView alloc] init];
     window.contentView = _contentView;

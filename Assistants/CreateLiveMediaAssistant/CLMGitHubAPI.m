@@ -11,6 +11,7 @@
 //
 
 #import "CLMGitHubAPI.h"
+#import "CLMStreamOperation.h"
 
 @implementation CLMRelease
 
@@ -153,7 +154,7 @@
         }
         
         for (CLMAsset *asset in release.assets) {
-            if ([asset.browserDownloadURL hasSuffix:@".iso"]) {
+            if ([CLMStreamOperation isImageAssetName:asset.browserDownloadURL]) {
                 // Create a composite object with both release and asset info
                 NSMutableDictionary *assetInfo = [NSMutableDictionary dictionary];
                 [assetInfo setObject:asset.name forKey:@"name"];

@@ -14,6 +14,7 @@
 #import "CLMController.h"
 #import "CLMConstants.h"
 #import "CLMGitHubAPI.h"
+#import "CLMStreamOperation.h"
 #import <GSNetworkUtilities.h>
 #import <GSDiskUtilities.h>
 #import "GSAssistantFramework.h"
@@ -56,10 +57,10 @@
     NSDebugLLog(@"gwcomp", @"CLMImageSelectionStep: setupView");
     
     // Fit step view to installer card inner area
-    _stepView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 354, 204)];
+    _stepView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 354, 228)];
     
-    // Repository selection
-    NSTextField *repoLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(8, 176, 86, 18)];
+    // Repository selection (flush top)
+    NSTextField *repoLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(8, 210, 86, 16)];
     [repoLabel setStringValue:NSLocalizedString(@"Repository:", @"")];
     [repoLabel setBezeled:NO];
     [repoLabel setDrawsBackground:NO];
@@ -67,7 +68,7 @@
     [repoLabel setSelectable:NO];
     [_stepView addSubview:repoLabel];
     
-    _repositoryPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(96, 174, 250, 22)];
+    _repositoryPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(96, 208, 250, 20)];
     NSArray<NSString *> *repos = CLMAvailableRepositories();
     for (NSString *repoURL in repos) {
         NSString *repoTitle = repoURL;
@@ -88,7 +89,7 @@
     [_stepView addSubview:_repositoryPopUp];
     
     // Prerelease checkbox
-    _prereleaseCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(8, 152, 220, 18)];
+    _prereleaseCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(8, 188, 220, 18)];
     [_prereleaseCheckbox setButtonType:NSSwitchButton];
     [_prereleaseCheckbox setTitle:@"Show Pre-release builds"];
     [_prereleaseCheckbox setState:NSOffState];
@@ -97,22 +98,23 @@
     [_stepView addSubview:_prereleaseCheckbox];
     
     // Loading indicator and label
-    _loadingIndicator = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(240, 152, 16, 16)];
+    _loadingIndicator = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(240, 188, 16, 16)];
     [_loadingIndicator setStyle:NSProgressIndicatorSpinningStyle];
     [_loadingIndicator setDisplayedWhenStopped:NO];
     [_stepView addSubview:_loadingIndicator];
     
-    _loadingLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(260, 150, 90, 18)];
+    _loadingLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(260, 186, 90, 18)];
     [_loadingLabel setStringValue:NSLocalizedString(@"Loading...", @"")];
     [_loadingLabel setBezeled:NO];
     [_loadingLabel setDrawsBackground:NO];
     [_loadingLabel setEditable:NO];
     [_loadingLabel setSelectable:NO];
+    [_loadingLabel setFont:[NSFont systemFontOfSize:11]];
     [_loadingLabel setHidden:YES];
     [_stepView addSubview:_loadingLabel];
     
-    // Release table (compact)
-    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(8, 36, 338, 112)];
+    // Release table (flush below checkbox)
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(8, 86, 338, 100)];
     [scrollView setHasVerticalScroller:YES];
     [scrollView setHasHorizontalScroller:NO];
     [scrollView setBorderType:NSBezelBorder];
@@ -156,8 +158,8 @@
                                                  name:NSTableViewSelectionDidChangeNotification
                                                object:_releaseTableView];
     
-    // Info labels (compact, below the table)
-    _dateLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(8, 20, 338, 14)];
+    // Info labels below the table
+    _dateLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(8, 70, 338, 14)];
     [_dateLabel setStringValue:NSLocalizedString(@"", @"")];
     [_dateLabel setBezeled:NO];
     [_dateLabel setDrawsBackground:NO];
@@ -166,16 +168,18 @@
     [_dateLabel setFont:[NSFont systemFontOfSize:10]];
     [_stepView addSubview:_dateLabel];
     
-    _urlLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(8, 6, 338, 14)];
+    _urlLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(8, 26, 338, 42)];
     [_urlLabel setStringValue:NSLocalizedString(@"", @"")];
     [_urlLabel setBezeled:NO];
     [_urlLabel setDrawsBackground:NO];
     [_urlLabel setEditable:NO];
     [_urlLabel setSelectable:NO];
     [_urlLabel setFont:[NSFont systemFontOfSize:10]];
+    [[_urlLabel cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    [[_urlLabel cell] setUsesSingleLineMode:NO];
     [_stepView addSubview:_urlLabel];
     
-    _sizeLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(8, -8, 338, 14)];
+    _sizeLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(8, 10, 338, 14)];
     [_sizeLabel setStringValue:NSLocalizedString(@"", @"")];
     [_sizeLabel setBezeled:NO];
     [_sizeLabel setDrawsBackground:NO];
@@ -268,7 +272,7 @@
         [openPanel setCanChooseFiles:YES];
         [openPanel setCanChooseDirectories:NO];
         [openPanel setAllowsMultipleSelection:NO];
-        [openPanel setAllowedFileTypes:@[@"iso", @"img"]];
+        [openPanel setAllowedFileTypes:@[@"iso", @"img", @"gz", @"xz", @"bz2", @"zst", @"lz", @"lzma"]];
         
         NSInteger result = [openPanel runModal];
         if (result == NSFileHandlingPanelOKButton) {
@@ -300,14 +304,19 @@
         return;
     }
     
+    // Check if this is a direct download URL (single image, not a GitHub API query)
+    NSURL *parsedURL = [NSURL URLWithString:repoURL];
+    if (parsedURL && [CLMStreamOperation isImageAssetName:[parsedURL lastPathComponent]]) {
+        [self loadDirectDownloadURL:repoURL];
+        return;
+    }
+    
     _isLoading = YES;
     [_loadingIndicator startAnimation:nil];
     [_loadingLabel setHidden:NO];
     [_availableReleases removeAllObjects];
     [_releaseArrayController rearrangeObjects];
-    // Force table view to reload its data
     [_releaseTableView reloadData];
-    // Clear any existing selection and update buttons while loading
     [_releaseTableView deselectAll:nil];
     [self requestNavigationUpdate];
     
@@ -317,14 +326,36 @@
         return;
     }
     
-    // Perform in background - for now do synchronously
-    // TODO: Implement proper background threading for GNUstep
     BOOL includePrereleases = ([_prereleaseCheckbox state] == NSOnState);
     NSArray *releases = [CLMGitHubAPI fetchReleasesFromRepository:repoURL includePrereleases:includePrereleases];
     NSArray *isoAssets = [CLMGitHubAPI extractISOAssetsFromReleases:releases 
                                              includePrereleases:includePrereleases];
     
     [self finishLoadingWithAssets:isoAssets];
+}
+
+- (void)loadDirectDownloadURL:(NSString *)urlString
+{
+    NSDebugLLog(@"gwcomp", @"CLMImageSelectionStep: loadDirectDownloadURL: %@", urlString);
+    
+    [_availableReleases removeAllObjects];
+    
+    NSMutableDictionary *asset = [NSMutableDictionary dictionary];
+    [asset setObject:[urlString lastPathComponent] forKey:@"name"];
+    [asset setObject:urlString forKey:@"url"];
+    [asset setObject:[NSNumber numberWithLongLong:0] forKey:@"size"];
+    [asset setObject:@"Direct URL" forKey:@"version"];
+    [asset setObject:@"" forKey:@"htmlURL"];
+    [asset setObject:[NSNumber numberWithBool:NO] forKey:@"prerelease"];
+    [asset setObject:[NSDate date] forKey:@"updatedAt"];
+    [asset setObject:[GSDiskUtilities formatSize:0] forKey:@"sizeFormatted"];
+    
+    [_availableReleases addObject:asset];
+    [_releaseArrayController rearrangeObjects];
+    [_releaseTableView reloadData];
+    [_releaseArrayController setSelectionIndex:0];
+    
+    [self requestNavigationUpdate];
 }
 
 - (void)loadLocalFile:(NSString *)filePath
@@ -433,9 +464,9 @@
             [_dateLabel setStringValue:NSLocalizedString(@"", @"")];
         }
         
-        NSString *htmlURL = [selectedRelease objectForKey:@"htmlURL"];
-        if (htmlURL && [htmlURL length] > 0) {
-            [_urlLabel setStringValue:[NSString stringWithFormat:@"URL: %@", htmlURL]];
+        NSString *downloadURL = [selectedRelease objectForKey:@"url"];
+        if (downloadURL && [downloadURL length] > 0) {
+            [_urlLabel setStringValue:downloadURL];
         } else {
             [_urlLabel setStringValue:NSLocalizedString(@"", @"")];
         }
@@ -491,7 +522,7 @@
             NSString *name = [selectedRelease objectForKey:@"name"];
             NSDebugLLog(@"gwcomp", @"CLMImageSelectionStep: name=%@ url=%@ size=%@", name, url, size);
             if ([url length] > 0 && [size longLongValue] > 0 &&
-                ([name hasSuffix:@".iso"] || [name hasSuffix:@".img"])) {
+                [CLMStreamOperation isImageAssetName:name]) {
                 NSDebugLLog(@"gwcomp", @"CLMImageSelectionStep: canContinue = YES");
                 return YES;
             }

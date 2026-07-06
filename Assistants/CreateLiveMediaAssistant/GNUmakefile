@@ -18,7 +18,11 @@ CreateLiveMediaAssistant_OBJC_FILES = \
 	CLMImageSelectionStep.m \
 	CLMDiskSelectionStep.m \
 	CLMInstallationStep.m \
-	CLMCompletionStep.m
+	CLMCompletionStep.m \
+	CLMBlockDeviceWriter.m \
+	CLMStreamDownloader.m \
+	CLMArchiveExtractor.m \
+	CLMStreamOperation.m
 
 # Resource files
 CreateLiveMediaAssistant_RESOURCE_FILES = \
@@ -33,8 +37,8 @@ CreateLiveMediaAssistant_RESOURCE_FILES = \
 CreateLiveMediaAssistant_GUI_LIBS += -lgnustep-gui -lgnustep-base
 
 # Compiler and linker flags - embed framework in bundle with proper rpath
-CreateLiveMediaAssistant_CPPFLAGS += -Wall -Wextra -fobjc-arc -Werror -Wno-unused-parameter -O2 -I$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1/Headers
-CreateLiveMediaAssistant_LDFLAGS += -L$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1 -lGSAssistantFramework -Wl,-rpath,'$$ORIGIN/Frameworks/GSAssistantFramework.framework/Versions/1' -Wl,-rpath,/System/Library/Libraries
+CreateLiveMediaAssistant_CPPFLAGS += -Wall -Wextra -fobjc-arc -Werror -Wno-unused-parameter -O2 -I$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1/Headers $(shell pkg-config --cflags libcurl libarchive 2>/dev/null)
+CreateLiveMediaAssistant_LDFLAGS += -L$(shell pwd)/../AssistantFramework/GSAssistantFramework.framework/Versions/1 -lGSAssistantFramework $(shell pkg-config --libs libcurl libarchive 2>/dev/null) -Wl,-rpath,'$$ORIGIN/Frameworks/GSAssistantFramework.framework/Versions/1' -Wl,-rpath,/System/Library/Libraries
 CreateLiveMediaAssistant_LDFLAGS += -ldispatch
 
 include $(GNUSTEP_MAKEFILES)/application.make

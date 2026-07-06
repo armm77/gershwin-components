@@ -126,7 +126,9 @@
 {
     NSDebugLLog(@"gwcomp", @"CLMController: showInstallationSuccess: %@", message);
     _installationSuccessful = YES;
-    // The success will be handled by the completion step
+
+    [_assistantWindow showSuccessPageWithTitle:NSLocalizedString(@"Installation Complete", @"")
+                                      message:message];
 }
 
 - (void)showInstallationError:(NSString *)message

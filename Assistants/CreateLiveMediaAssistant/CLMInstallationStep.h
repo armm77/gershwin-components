@@ -4,20 +4,14 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-
-//
-// CLMInstallationStep.h
-// Create Live Media Assistant - Installation Step
-//
-
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <GSAssistantFramework.h>
-#import "GSNetworkUtilities.h"
+#import "CLMStreamOperation.h"
 
 @class CLMController;
 
-@interface CLMInstallationStep : NSObject <GSAssistantStepProtocol, GSDownloaderDelegate>
+@interface CLMInstallationStep : NSObject <GSAssistantStepProtocol, CLMStreamOperationDelegate>
 {
     NSView *_stepView;
     __weak CLMController *_controller;
@@ -25,27 +19,13 @@
     NSTextField *_statusLabel;
     NSTextField *_progressLabel;
     NSTextField *_infoLabel;
-    GSDownloader *_downloader;
     BOOL _installationInProgress;
     BOOL _installationCompleted;
     BOOL _installationSuccessful;
-    
-    // Stall detection
-    NSTimer *_stallDetectionTimer;
-    NSTimeInterval _lastProgressTime;
-    float _lastProgressValue;
-    
-    // DD progress simulation timer
-    NSTimer *_ddProgressTimer;
-    NSTimeInterval _ddStartTime;
-    
-    // Direct download approach using NSURLConnection
-    NSURLConnection *_directConnection;
-    NSFileHandle *_directOutputFile;
-    NSString *_devicePath;
-    NSString *_tempFilePath;
-    long long _directTotalBytes;
-    long long _directReceivedBytes;
+    CLMStreamOperation *_streamOp;
+    NSOperationQueue *_opQueue;
+    NSTimeInterval _downloadStartTime;
+    NSTimeInterval _lastUIUpdateTime;
 }
 
 @property (nonatomic, weak) CLMController *controller;

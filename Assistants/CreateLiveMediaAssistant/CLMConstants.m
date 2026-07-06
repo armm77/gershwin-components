@@ -13,7 +13,7 @@ NSArray<NSString *> *CLMAvailableRepositories(void)
     dispatch_once(&onceToken, ^{
         repos = @[
             @"https://api.github.com/repos/gershwin-desktop/gershwin-on-freebsd/releases",
-            @"https://api.github.com/repos/gershwin-desktop/gershwin-on-ghostbsd/releases",
+            @"https://api.github.com/repos/gershwin-desktop/gershwin-on-devuan/releases",
             @"https://api.github.com/repos/gershwin-desktop/gershwin-on-debian/releases",
             @"https://api.github.com/repos/gershwin-desktop/gershwin-on-arch/releases",
             @"https://api.github.com/repos/pkgdemon/gershwin-on-nextbsd/releases",
