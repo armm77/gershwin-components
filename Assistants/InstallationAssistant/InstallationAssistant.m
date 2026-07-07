@@ -236,7 +236,10 @@ int main(int argc, const char *argv[]) {
               imageSource ?: @"none");
         
         IAWelcomeStep *welcomeStep = [[IAWelcomeStep alloc] init];
-        IALicenseStep *licenseStep = [[IALicenseStep alloc] init];
+        IALicenseStep *licenseStep = nil;
+        if ([GSLocalizedContentManager hasLicenseContent]) {
+            licenseStep = [[IALicenseStep alloc] init];
+        }
         IAInstallTypeStep *installTypeStep = nil;
         if (imageAvailable) {
             installTypeStep = [[IAInstallTypeStep alloc] init];
@@ -277,7 +280,9 @@ int main(int argc, const char *argv[]) {
         [builder allowingCancel:YES];
         
         [builder addStep:welcomeStep];
-        [builder addStep:licenseStep];
+        if (licenseStep) {
+            [builder addStep:licenseStep];
+        }
         if (installTypeStep) {
             [builder addStep:installTypeStep];
         }
