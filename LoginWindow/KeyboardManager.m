@@ -288,6 +288,46 @@ static BOOL parseRcConfKeymap(const char **layout, const char **variant)
     fclose(rc_conf);
     return found;
 }
+static BOOL parseEtcDefaultKeyboard(const char **layout,
+                                    const char **variant,
+                                    const char **options)
+{
+#if defined(__linux__)
+    static char buf_layout[64], buf_variant[64], buf_options[256];
+    FILE *fp = fopen("/etc/default/keyboard", "r");
+    if (!fp) return NO;
+    char line[256];
+    BOOL found = NO;
+    while (fgets(line, sizeof(line), fp)) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        if (strncmp(line, "XKBLAYOUT=", 10) == 0) {
+            char *val = line + 10;
+            if (*val == '"') { val++; char *eq = strchr(val, '"'); if (eq) *eq = '\0'; }
+            if (val[0]) { strncpy(buf_layout, val, sizeof(buf_layout) - 1); buf_layout[sizeof(buf_layout) - 1] = '\0'; *layout = buf_layout; found = YES; }
+        } else if (strncmp(line, "XKBVARIANT=", 11) == 0) {
+            char *val = line + 11;
+            if (*val == '"') { val++; char *eq = strchr(val, '"'); if (eq) *eq = '\0'; }
+            if (val[0]) { strncpy(buf_variant, val, sizeof(buf_variant) - 1); buf_variant[sizeof(buf_variant) - 1] = '\0'; *variant = buf_variant; }
+        } else if (strncmp(line, "XKBOPTIONS=", 11) == 0) {
+            char *val = line + 11;
+            if (*val == '"') { val++; char *eq = strchr(val, '"'); if (eq) *eq = '\0'; }
+            if (val[0]) { strncpy(buf_options, val, sizeof(buf_options) - 1); buf_options[sizeof(buf_options) - 1] = '\0'; *options = buf_options; }
+        }
+    }
+    fclose(fp);
+    if (found) {
+        NSLog(@"KeyboardManager: /etc/default/keyboard layout=%s variant=%s options=%s",
+              *layout ? *layout : "(null)",
+              *variant ? *variant : "(null)",
+              *options ? *options : "(null)");
+    }
+    return found;
+#else
+    (void)layout; (void)variant; (void)options;
+    return NO;
+#endif
+}
 static const char *efiLocaleToLayout(const char *locale)
 {
     if (strcmp(locale, "de") == 0) return "de";
@@ -457,6 +497,10 @@ static BOOL detectKeyboardFromEFI(const char **layout,
     const char *c_layout = NULL;
     const char *c_variant = NULL;
     const char *c_options = NULL;
+    if (parseEtcDefaultKeyboard(&c_layout, &c_variant, &c_options)) {
+        NSLog(@"KeyboardManager: Keyboard source: /etc/default/keyboard");
+        goto done;
+    }
     if (detectKeyboardFromEFI(&c_layout, &c_variant, &c_options)) {
         NSLog(@"KeyboardManager: Keyboard source: EFI NVRAM");
         goto done;
