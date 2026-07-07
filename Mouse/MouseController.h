@@ -30,11 +30,8 @@
 
     NSString *xinputPath;
     NSString *touchpadName;
-    NSString *touchpadId;
     NSString *mouseName;
-    NSString *mouseId;
     NSString *trackpointName;
-    NSString *trackpointId;
 
     BOOL isRefreshing;
 }
