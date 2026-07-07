@@ -239,15 +239,50 @@ static NSString *const kMicControl = @"Mic";
                 NSRange nameRange = NSMakeRange(openBracket.location + 1,
                     closeBracket.location - openBracket.location - 1);
                 device.cardName = [line substringWithRange:nameRange];
-                device.displayName = device.cardName;
             }
 
-            // Parse device number
+            // Parse device number and device descriptor
             NSRange deviceRange = [line rangeOfString:@"device "];
             if (deviceRange.location != NSNotFound) {
                 NSString *devicePart = [line substringFromIndex:
                                        NSMaxRange(deviceRange)];
                 device.deviceIndex = [devicePart intValue];
+
+                // Extract device descriptor after "device N: "
+                NSRange colonRange = [devicePart rangeOfString:@": "];
+                if (colonRange.location != NSNotFound) {
+                    NSString *desc = [devicePart
+                        substringFromIndex:NSMaxRange(colonRange)];
+                    NSRange parenRange = [desc rangeOfString:@" ("];
+                    NSRange bracketRange = [desc rangeOfString:@" ["];
+                    NSRange endRange;
+                    if (parenRange.location != NSNotFound &&
+                        bracketRange.location != NSNotFound) {
+                        endRange = (parenRange.location < bracketRange.location)
+                            ? parenRange : bracketRange;
+                    } else if (parenRange.location != NSNotFound) {
+                        endRange = parenRange;
+                    } else if (bracketRange.location != NSNotFound) {
+                        endRange = bracketRange;
+                    } else {
+                        endRange = NSMakeRange([desc length], 0);
+                    }
+                    NSString *deviceName = [[desc
+                        substringToIndex:endRange.location]
+                        stringByTrimmingCharactersInSet:
+                        [NSCharacterSet whitespaceCharacterSet]];
+                    if ([deviceName length] > 0 &&
+                        ![deviceName isEqualToString:device.cardName]) {
+                        device.displayName = [NSString stringWithFormat:
+                            @"%@ - %@", device.cardName, deviceName];
+                    } else {
+                        device.displayName = device.cardName;
+                    }
+                } else {
+                    device.displayName = device.cardName;
+                }
+            } else {
+                device.displayName = device.cardName;
             }
 
             // Create identifier and stable device ID
@@ -320,15 +355,50 @@ static NSString *const kMicControl = @"Mic";
                 NSRange nameRange = NSMakeRange(openBracket.location + 1,
                     closeBracket.location - openBracket.location - 1);
                 device.cardName = [line substringWithRange:nameRange];
-                device.displayName = device.cardName;
             }
             
-            // Parse device number
+            // Parse device number and device descriptor
             NSRange deviceRange = [line rangeOfString:@"device "];
             if (deviceRange.location != NSNotFound) {
                 NSString *devicePart = [line substringFromIndex:
                                        NSMaxRange(deviceRange)];
                 device.deviceIndex = [devicePart intValue];
+
+                // Extract device descriptor after "device N: "
+                NSRange colonRange = [devicePart rangeOfString:@": "];
+                if (colonRange.location != NSNotFound) {
+                    NSString *desc = [devicePart
+                        substringFromIndex:NSMaxRange(colonRange)];
+                    NSRange parenRange = [desc rangeOfString:@" ("];
+                    NSRange bracketRange = [desc rangeOfString:@" ["];
+                    NSRange endRange;
+                    if (parenRange.location != NSNotFound &&
+                        bracketRange.location != NSNotFound) {
+                        endRange = (parenRange.location < bracketRange.location)
+                            ? parenRange : bracketRange;
+                    } else if (parenRange.location != NSNotFound) {
+                        endRange = parenRange;
+                    } else if (bracketRange.location != NSNotFound) {
+                        endRange = bracketRange;
+                    } else {
+                        endRange = NSMakeRange([desc length], 0);
+                    }
+                    NSString *deviceName = [[desc
+                        substringToIndex:endRange.location]
+                        stringByTrimmingCharactersInSet:
+                        [NSCharacterSet whitespaceCharacterSet]];
+                    if ([deviceName length] > 0 &&
+                        ![deviceName isEqualToString:device.cardName]) {
+                        device.displayName = [NSString stringWithFormat:
+                            @"%@ - %@", device.cardName, deviceName];
+                    } else {
+                        device.displayName = device.cardName;
+                    }
+                } else {
+                    device.displayName = device.cardName;
+                }
+            } else {
+                device.displayName = device.cardName;
             }
             
             device.identifier = [NSString stringWithFormat:@"hw:%d,%d",
