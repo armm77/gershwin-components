@@ -158,7 +158,7 @@ else
             echo "Image-based install: copying from $ISO_MP"
             SRC="$ISO_MP"
         else
-            printf "Found ISO9660 installation media. Use it as source? [Y/n]: "
+            printf "Perform image-based installation (like Live system)? [Y/n]: "
             read -r image_ans
             case "$image_ans" in
                 [Nn]*) SRC="/" ;;
@@ -170,6 +170,57 @@ fi
 
 MNT="/mnt/target"
 EFI_SIZE="512MiB"
+
+# Automounter control
+AUTOMOUNTER_SERVICE=""
+AUTOMOUNTER_DEVMON=""
+disable_automounter() {
+    # Stop udisks2 if it's a systemd service (Debian/Arch/Artix)
+    if command -v systemctl >/dev/null 2>&1; then
+        AUTOMOUNTER_SERVICE=$(systemctl list-units --type=service --state=running 2>/dev/null | grep -o 'udisks2\.service' | head -n1 || true)
+        if [ -n "$AUTOMOUNTER_SERVICE" ]; then
+            echo "Stopping automounter ($AUTOMOUNTER_SERVICE)..."
+            systemctl stop "$AUTOMOUNTER_SERVICE" 2>/dev/null || true
+        fi
+    fi
+    # Stop D-Bus activated udisksd on Devuan (non-systemd)
+    if command -v killall >/dev/null 2>&1; then
+        killall -q udisksd 2>/dev/null || true
+    fi
+    # Stop devmon (udevil) automounter used on Devuan
+    if command -v devmon >/dev/null 2>&1; then
+        AUTOMOUNTER_DEVMON=$(pgrep -x devmon 2>/dev/null || true)
+        if [ -n "$AUTOMOUNTER_DEVMON" ]; then
+            echo "Stopping devmon automounter..."
+            killall -q devmon 2>/dev/null || true
+        fi
+    fi
+    # Stop udiskie if present
+    if command -v udiskie >/dev/null 2>&1; then
+        killall -q udiskie 2>/dev/null || true
+    fi
+    # Stop eudev on Devuan (OpenRC) to prevent automount
+    if [ -e /etc/init.d/eudev ]; then
+        service eudev stop 2>/dev/null || true
+    fi
+}
+
+enable_automounter() {
+    # Restart udisks systemd service if we stopped one
+    if [ -n "$AUTOMOUNTER_SERVICE" ] && command -v systemctl >/dev/null 2>&1; then
+        echo "Starting automounter ($AUTOMOUNTER_SERVICE)..."
+        systemctl start "$AUTOMOUNTER_SERVICE" 2>/dev/null || true
+    fi
+    # Restart devmon if we stopped it (Devuan)
+    if [ -n "$AUTOMOUNTER_DEVMON" ] && command -v devmon >/dev/null 2>&1; then
+        echo "Starting devmon automounter..."
+        devmon 2>/dev/null &
+    fi
+    # Restart eudev on Devuan (OpenRC)
+    if [ -e /etc/init.d/eudev ]; then
+        service eudev start 2>/dev/null || true
+    fi
+}
 
 umount_recursive() {
     # Unmount everything under $MNT
@@ -243,18 +294,17 @@ else
     fi
 
     echo "Available disks for installation:"
-    disk_count=$(echo "$DISKS_LIST" | wc -l)
-    echo "$DISKS_LIST" | {
     i=1
     while IFS='|' read -r dev model size; do
         [ -z "$model" ] && model="Unknown Model"
         size_gb=$(awk -v b="$size" 'BEGIN { printf "%.1f", b / 1073741824 }')
         echo "$i) $dev - $model (${size_gb}G)"
         i=$((i+1))
-    done
-    }
+    done <<EOF
+$DISKS_LIST
+EOF
 
-    printf "Select a disk (1-%d): " "$disk_count"
+    printf "Select a disk (1-%d): " "$((i-1))"
     read -r choice
     DISK=$(echo "$DISKS_LIST" | sed -n "${choice}p" | cut -d'|' -f1)
 
@@ -304,6 +354,8 @@ mkdir -p "$MNT"
 # Partitioning
 report_progress "Partitioning" 8 "Wiping old partition table..."
 echo "Creating new partition table on $DISK..."
+# Disable automounter to prevent interference
+disable_automounter
 # Wipe filesystem signatures
 wipefs -a "$DISK"
 
@@ -373,6 +425,9 @@ elif [ "$BOOT_METHOD" = "BROADCOM" ]; then
     mount "$EFI_PART" "$MNT$RPI_BOOT_DIR"
 fi
 
+# Re-enable automounter now that filesystems are mounted
+enable_automounter
+
 # Copying System
 report_progress "Copying" 25 "Starting system copy from $SRC..."
 echo "Copying system from $SRC to $MNT..."
@@ -410,10 +465,10 @@ if mount | grep -q "type iso9660" && [ -n "$SRC" ] && [ -d "$SRC" ]; then
     fi
 fi
 
-# Excludes (relative to SRC)
-EXCLUDES="dev proc sys tmp run mnt media lost+found var/lib/dhcp var/lib/dhcpcd var/run var/tmp var/cache boot/efi"
+# Excludes (relative to SRC) - using /* suffix to exclude contents but keep directory structure
+EXCLUDES="dev/* proc/* sys/* tmp/* run/* mnt/* media/* lost+found var/lib/dhcp/* var/lib/dhcpcd/* var/run/* var/tmp/* var/cache/* boot/efi/*"
 if [ "$BOOT_METHOD" = "BROADCOM" ]; then
-    EXCLUDES="$EXCLUDES ${RPI_BOOT_DIR#/}"
+    EXCLUDES="$EXCLUDES ${RPI_BOOT_DIR#/}/*"
 fi
 
 EXCLUDE_ARGS=""
@@ -443,7 +498,7 @@ else
 fi
 
 # Re-create excluded mount point directories
-for d in dev proc sys run tmp mnt media; do
+for d in dev proc sys run tmp mnt media boot/efi var/run var/tmp var/cache var/lib/dhcp var/lib/dhcpcd; do
     mkdir -p "$MNT/$d"
 done
 chmod 1777 "$MNT/tmp"
@@ -466,7 +521,7 @@ elif [ "$BOOT_METHOD" = "BROADCOM" ]; then
     echo "Copying Broadcom firmware to boot partition from $RPI_BOOT_DIR..."
     # Copy from the host's RPI_BOOT_DIR as it contains the working firmware
     cp -rv "$RPI_BOOT_DIR"/* "$MNT$RPI_BOOT_DIR/"
-    
+
     echo "Updating cmdline.txt with new ROOT PARTUUID..."
     ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$ROOT_PART")
     if [ -n "$ROOT_PARTUUID" ]; then
@@ -514,7 +569,15 @@ echo "Finalizing installation..."
 sync
 
 report_progress "Finalizing" 98 "Unmounting target..."
+# Unmount bind mounts first
+for dir in dev proc sys run; do
+    umount -f "$MNT/$dir" 2>/dev/null || true
+    mkdir -p "$MNT/$dir"
+done
 umount_recursive
+
+# Re-enable automounter now that we're done
+enable_automounter
 
 report_progress "Complete" 100 "Installation complete."
 echo "=== COMPLETE ==="
