@@ -11,8 +11,9 @@ static NSString *const kMouseDomain = @"MousePreferences";
 
 @interface MouseController ()
 - (NSString *)findXinput;
-- (NSArray *)xinputDeviceNamesMatching:(NSString *)pattern;
+- (NSDictionary *)xinputNameToIdMap;
 - (void)enumerateDevices;
+- (NSString *)identifierForDevice:(NSString *)name;
 - (NSDictionary *)getPropertiesForDevice:(NSString *)device;
 - (NSString *)propertyValue:(NSDictionary *)props name:(NSString *)name;
 - (void)setProperty:(NSString *)prop forDevice:(NSString *)device value:(NSString *)value;
@@ -30,8 +31,11 @@ static NSString *const kMouseDomain = @"MousePreferences";
         isRefreshing = YES;
         xinputPath = nil;
         touchpadName = nil;
+        touchpadId = nil;
         mouseName = nil;
+        mouseId = nil;
         trackpointName = nil;
+        trackpointId = nil;
     }
     return self;
 }
@@ -51,12 +55,14 @@ static NSString *const kMouseDomain = @"MousePreferences";
     [threeFingerMiddleClickCheckbox release];
     [disableWhileTypingCheckbox release];
     [leftHandedCheckbox release];
-    [scrollMethodPopup release];
     [statusLabel release];
     [xinputPath release];
     [touchpadName release];
+    [touchpadId release];
     [mouseName release];
+    [mouseId release];
     [trackpointName release];
+    [trackpointId release];
     [super dealloc];
 }
 
@@ -66,6 +72,10 @@ static NSString *const kMouseDomain = @"MousePreferences";
     NSArray *candidates = [NSArray arrayWithObjects:
         @"/usr/bin/xinput",
         @"/usr/local/bin/xinput",
+        @"/opt/local/bin/xinput",
+        @"/opt/bin/xinput",
+        @"/usr/pkg/bin/xinput",
+        @"/usr/X11R6/bin/xinput",
         nil];
     for (NSString *path in candidates) {
         if ([fm isExecutableFileAtPath:path]) {
@@ -89,66 +99,144 @@ static NSString *const kMouseDomain = @"MousePreferences";
     return nil;
 }
 
-- (NSArray *)xinputDeviceNamesMatching:(NSString *)pattern
+- (NSDictionary *)xinputNameToIdMap
 {
     if (!xinputPath) {
-        return [NSArray array];
+        return [NSDictionary dictionary];
     }
     NSTask *task = [[NSTask alloc] init];
     [task setLaunchPath:xinputPath];
-    [task setArguments:[NSArray arrayWithObjects:@"list", @"--name-only", nil]];
+    [task setArguments:[NSArray arrayWithObjects:@"list", nil]];
     NSPipe *pipe = [NSPipe pipe];
     [task setStandardOutput:pipe];
     [task launch];
     NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
     [task waitUntilExit];
-    NSString *output = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
     [task release];
-    NSMutableArray *result = [NSMutableArray array];
+    NSString *output = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
+    NSMutableDictionary *map = [NSMutableDictionary dictionary];
+    // Parse "xinput list" output: matches lines like:
+    //   ↳ SynPS/2 Synaptics TouchPad            id=11   [slave  pointer  (2)]
+    // Also handles: "device name  id=N" and "device name\tid=N"
     NSArray *lines = [output componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
     for (NSString *line in lines) {
-        if ([line rangeOfString:pattern].location != NSNotFound) {
-            [result addObject:[[line copy] autorelease]];
+        NSScanner *scanner = [NSScanner scannerWithString:line];
+        NSString *name = nil;
+        // Skip leading arrows/whitespace
+        [scanner scanUpToCharactersFromSet:[NSCharacterSet alphanumericCharacterSet]
+                                intoString:nil];
+        // Scan device name up to "id="
+        if (![scanner scanUpToString:@"id=" intoString:&name]) {
+            continue;
+        }
+        name = [name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([name length] == 0) {
+            continue;
+        }
+        // Scan the ID number
+        [scanner scanString:@"id=" intoString:nil];
+        NSString *idStr = nil;
+        if (![scanner scanUpToString:@"[" intoString:&idStr]) {
+            [scanner scanUpToCharactersFromSet:[NSCharacterSet newlineCharacterSet]
+                                    intoString:&idStr];
+        }
+        idStr = [idStr stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([idStr length] > 0) {
+            [map setObject:idStr forKey:name];
         }
     }
-    return result;
+    return map;
+}
+
+- (NSString *)identifierForDevice:(NSString *)name
+{
+    if (!name) return nil;
+    NSDictionary *map = [self xinputNameToIdMap];
+    NSString *devId = [map objectForKey:name];
+    if (devId) return devId;
+    // Fallback: try using the name directly (may fail with spaces on some xinput versions)
+    return name;
+}
+
+- (BOOL)matchesAny:(NSString *)name patterns:(NSArray *)patterns
+{
+    for (NSString *p in patterns) {
+        if ([name rangeOfString:p].location != NSNotFound) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 - (void)enumerateDevices
 {
     [touchpadName release];
+    [touchpadId release];
     [mouseName release];
+    [mouseId release];
     [trackpointName release];
+    [trackpointId release];
     touchpadName = nil;
+    touchpadId = nil;
     mouseName = nil;
+    mouseId = nil;
     trackpointName = nil;
-    NSArray *touchpads = [self xinputDeviceNamesMatching:@"Touchpad"];
-    if ([touchpads count] > 0) {
-        touchpadName = [[touchpads objectAtIndex:0] copy];
-    }
-    NSArray *trackpoints = [self xinputDeviceNamesMatching:@"TrackPoint"];
-    if ([trackpoints count] > 0) {
-        trackpointName = [[trackpoints objectAtIndex:0] copy];
-    }
-    // Also match "ELAN" or "Synaptics" devices without "Touchpad" as mice
-    NSArray *all = [self xinputDeviceNamesMatching:@""];
-    for (NSString *name in all) {
-        if ([name rangeOfString:@"XTEST"].location != NSNotFound ||
-            [name rangeOfString:@"Virtual"].location != NSNotFound) {
+    trackpointId = nil;
+
+    NSDictionary *nameMap = [self xinputNameToIdMap];
+    NSArray *tpPatterns = [NSArray arrayWithObjects:
+        @"TouchPad", @"Touchpad", @"touchpad",
+        @"Synaptics", @"ALPS", @"Elan", @"Elantech",
+        @"bcm5974", @"appletouch",
+        nil];
+    NSArray *trackpointPatterns = [NSArray arrayWithObjects:
+        @"TrackPoint", @"Trackpoint", @"Track point",
+        nil];
+    NSArray *skipPatterns = [NSArray arrayWithObjects:
+        @"XTEST", @"Virtual", @"virtual",
+        @"keyboard", @"Keyboard",
+        @"Button",
+        @"HID ", @"HID/",
+        @"Power Button", @"Sleep Button", @"Lid Switch",
+        @"Video Bus",
+        nil];
+    NSArray *bsdPointerPatterns = [NSArray arrayWithObjects:
+        @"ums", @"wsmouse", @"sysmouse", @"pms",
+        nil];
+
+    for (NSString *name in nameMap) {
+        NSString *devId = [nameMap objectForKey:name];
+
+        // Skip virtual/internal non-pointer devices
+        if ([self matchesAny:name patterns:skipPatterns]) {
             continue;
         }
-        if ([name rangeOfString:@"Touchpad"].location != NSNotFound ||
-            [name rangeOfString:@"TrackPoint"].location != NSNotFound) {
+
+        // Touchpad detection (Linux + BSD)
+        if (touchpadName == nil && [self matchesAny:name patterns:tpPatterns]) {
+            touchpadName = [name copy];
+            touchpadId = [devId copy];
             continue;
         }
-        if ([name rangeOfString:@"keyboard"].location != NSNotFound ||
-            [name rangeOfString:@"Keyboard"].location != NSNotFound ||
-            [name rangeOfString:@"Button"].location != NSNotFound ||
-            [name rangeOfString:@"HID "].location != NSNotFound) {
+
+        // TrackPoint detection
+        if (trackpointName == nil && [self matchesAny:name patterns:trackpointPatterns]) {
+            trackpointName = [name copy];
+            trackpointId = [devId copy];
             continue;
         }
+
+        // BSD pointer detection (if not already classified as touchpad/trackpoint)
+        if (mouseName == nil && [self matchesAny:name patterns:bsdPointerPatterns]) {
+            mouseName = [name copy];
+            mouseId = [devId copy];
+            continue;
+        }
+
+        // Generic pointer: first unmatching device becomes the mouse
         if (mouseName == nil) {
             mouseName = [name copy];
+            mouseId = [devId copy];
         }
     }
 }
@@ -474,7 +562,7 @@ static NSString *const kMouseDomain = @"MousePreferences";
 
 - (void)updateSectionTitles
 {
-    BOOL hasTrackpoint = ([trackpointName length] > 0);
+    BOOL hasTrackpoint = ([trackpointName length] > 0 || [trackpointId length] > 0);
     [trackpointSpeedSlider setEnabled:hasTrackpoint];
 }
 
@@ -492,68 +580,71 @@ static NSString *const kMouseDomain = @"MousePreferences";
     if (isRefreshing) {
         return;
     }
+    NSString *tpDev = touchpadId ? touchpadId : touchpadName;
+    NSString *mDev = mouseId ? mouseId : mouseName;
+    NSString *tppDev = trackpointId ? trackpointId : trackpointName;
+
     // -- Natural Scrolling --
     BOOL natural = ([naturalScrollingCheckbox state] == NSOnState);
-    if (touchpadName) {
+    if (tpDev) {
         [self setBoolProperty:@"libinput Natural Scrolling Enabled"
-                    forDevice:touchpadName value:natural];
+                    forDevice:tpDev value:natural];
     }
-    // Also apply to ELAN mouse device (same physical device)
-    if (mouseName) {
+    if (mDev) {
         [self setBoolProperty:@"libinput Natural Scrolling Enabled"
-                    forDevice:mouseName value:natural];
+                    forDevice:mDev value:natural];
     }
-    if (trackpointName) {
+    if (tppDev) {
         [self setBoolProperty:@"libinput Natural Scrolling Enabled"
-                    forDevice:trackpointName value:natural];
+                    forDevice:tppDev value:natural];
     }
     // -- Left Handed --
     BOOL lefty = ([leftHandedCheckbox state] == NSOnState);
-    if (touchpadName) {
+    if (tpDev) {
         [self setBoolProperty:@"libinput Left Handed Enabled"
-                    forDevice:touchpadName value:lefty];
+                    forDevice:tpDev value:lefty];
     }
-    if (mouseName) {
+    if (mDev) {
         [self setBoolProperty:@"libinput Left Handed Enabled"
-                    forDevice:mouseName value:lefty];
+                    forDevice:mDev value:lefty];
     }
-    if (trackpointName) {
+    if (tppDev) {
         [self setBoolProperty:@"libinput Left Handed Enabled"
-                    forDevice:trackpointName value:lefty];
+                    forDevice:tppDev value:lefty];
     }
     // -- Mouse Speed --
     float mSpeed = [mouseSpeedSlider floatValue];
     [mouseSpeedLabel setFloatValue:mSpeed];
-    if (touchpadName) {
-        [self setProperty:@"libinput Accel Speed" forDevice:touchpadName
+    if (tpDev) {
+        [self setProperty:@"libinput Accel Speed" forDevice:tpDev
                     value:[NSString stringWithFormat:@"%.3f", mSpeed]];
     }
-    if (mouseName) {
-        [self setProperty:@"libinput Accel Speed" forDevice:mouseName
+    if (mDev) {
+        [self setProperty:@"libinput Accel Speed" forDevice:mDev
                     value:[NSString stringWithFormat:@"%.3f", mSpeed]];
     }
     // -- Trackpad Speed --
     float tSpeed = [trackpadSpeedSlider floatValue];
     [trackpadSpeedLabel setFloatValue:tSpeed];
-    if (touchpadName) {
-        [self setProperty:@"libinput Accel Speed" forDevice:touchpadName
+    if (tpDev) {
+        [self setProperty:@"libinput Accel Speed" forDevice:tpDev
                     value:[NSString stringWithFormat:@"%.3f", tSpeed]];
     }
     // -- TrackPoint Speed --
     float tpSpeed = [trackpointSpeedSlider floatValue];
     [trackpointSpeedLabel setFloatValue:tpSpeed];
-    if (trackpointName) {
-        [self setProperty:@"libinput Accel Speed" forDevice:trackpointName
+    if (tppDev) {
+        [self setProperty:@"libinput Accel Speed" forDevice:tppDev
                     value:[NSString stringWithFormat:@"%.3f", tpSpeed]];
     }
     // -- Tap to Click --
     BOOL tap = ([tapToClickCheckbox state] == NSOnState);
-    if (touchpadName) {
+    if (tpDev) {
         [self setBoolProperty:@"libinput Tapping Enabled"
-                    forDevice:touchpadName value:tap];
+                    forDevice:tpDev value:tap];
     }
     // -- Tap Button Mapping --
-    if (touchpadName) {
+    if (tpDev) {
         BOOL twoFingerRC = ([twoFingerRightClickCheckbox state] == NSOnState);
         BOOL threeFingerMC = ([threeFingerMiddleClickCheckbox state] == NSOnState);
         NSString *mapVal = @"1, 0";
@@ -562,28 +653,23 @@ static NSString *const kMouseDomain = @"MousePreferences";
         } else if (twoFingerRC && !threeFingerMC) {
             mapVal = @"1, 0";
         } else if (twoFingerRC && threeFingerMC) {
-            // Both enabled - use clickfinger mapping with 3 areas:
-            // Actually libinput can't do both simultaneously with Tapping Button Mapping.
-            // Use Clickfinger button mapping: 1,0 = left/right click areas
-            // This is incompatible. Just use two-finger as default.
             mapVal = @"1, 0";
         }
         [self setProperty:@"libinput Tapping Button Mapping"
-                forDevice:touchpadName value:mapVal];
-        // Clickfinger button mapping: 1,0 = area left/right; 0,1 = 3 areas
+                forDevice:tpDev value:mapVal];
         if (threeFingerMC) {
             [self setProperty:@"libinput Clickfinger Button Mapping"
-                    forDevice:touchpadName value:@"1, 0"];
+                    forDevice:tpDev value:@"1, 0"];
         } else {
             [self setProperty:@"libinput Clickfinger Button Mapping"
-                    forDevice:touchpadName value:@"1, 0"];
+                    forDevice:tpDev value:@"1, 0"];
         }
     }
     // -- Disable While Typing --
     BOOL dwts = ([disableWhileTypingCheckbox state] == NSOnState);
-    if (touchpadName) {
+    if (tpDev) {
         [self setBoolProperty:@"libinput Disable While Typing Enabled"
-                    forDevice:touchpadName value:dwts];
+                    forDevice:tpDev value:dwts];
     }
     // -- Persist --
     [self persistSettings];
@@ -603,13 +689,19 @@ static NSString *const kMouseDomain = @"MousePreferences";
         NSDictionary *tpProps = nil;
         NSDictionary *mProps = nil;
         NSDictionary *tppProps = nil;
-        if (touchpadName) {
+        if (touchpadId) {
+            tpProps = [self getPropertiesForDevice:touchpadId];
+        } else if (touchpadName) {
             tpProps = [self getPropertiesForDevice:touchpadName];
         }
-        if (mouseName) {
+        if (mouseId) {
+            mProps = [self getPropertiesForDevice:mouseId];
+        } else if (mouseName) {
             mProps = [self getPropertiesForDevice:mouseName];
         }
-        if (trackpointName) {
+        if (trackpointId) {
+            tppProps = [self getPropertiesForDevice:trackpointId];
+        } else if (trackpointName) {
             tppProps = [self getPropertiesForDevice:trackpointName];
         }
         dispatch_async(dispatch_get_main_queue(), ^{

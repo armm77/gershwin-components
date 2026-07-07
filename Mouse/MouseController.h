@@ -26,14 +26,15 @@
     NSButton *disableWhileTypingCheckbox;
     NSButton *leftHandedCheckbox;
 
-    NSPopUpButton *scrollMethodPopup;
-
     NSTextField *statusLabel;
 
     NSString *xinputPath;
     NSString *touchpadName;
+    NSString *touchpadId;
     NSString *mouseName;
+    NSString *mouseId;
     NSString *trackpointName;
+    NSString *trackpointId;
 
     BOOL isRefreshing;
 }
