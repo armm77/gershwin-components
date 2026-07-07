@@ -158,11 +158,14 @@ else
             echo "Image-based install: copying from $ISO_MP"
             SRC="$ISO_MP"
         else
-            printf "Perform image-based installation (like Live system)? [Y/n]: "
+            printf "Perform image-based installation (like Live system)? [y/N]: "
             read -r image_ans
             case "$image_ans" in
-                [Nn]*) SRC="/" ;;
-                *) SRC="$ISO_MP" ;;
+                [Yy]*)
+                    echo "Image-based install: copying from $ISO_MP"
+                    SRC="$ISO_MP"
+                    ;;
+                *) SRC="/" ;;
             esac
         fi
     fi

@@ -57,17 +57,38 @@ if [ "$LIST_DISKS" != "1" ] && [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Temporarily disable automounter to prevent automounting interference.
-# `service devd stop` is not working reliably, so mount a tmpfs over /usr/local/sbin as a workaround.
-# FIXME: Find a better way
-MOUNTED_TMPFS=0
-if [ "$LIST_DISKS" != "1" ]; then
-    if ! mount | awk '{print $3}' | grep -qx '/usr/local/sbin'; then
-        mount -t tmpfs tmpfs /usr/local/sbin
-        MOUNTED_TMPFS=1
+# Automounter control
+AUTOMOUNTER_DEVD=""
+disable_automounter() {
+    if command -v service >/dev/null 2>&1; then
+        if service devd onestatus 2>/dev/null; then
+            AUTOMOUNTER_DEVD=1
+            echo "Stopping devd..."
+            service devd onestop 2>/dev/null || true
+        fi
     fi
-fi
-trap 'if [ "$MOUNTED_TMPFS" = "1" ]; then umount /usr/local/sbin 2>/dev/null || true; fi' EXIT
+    # Forceful fallback if service stop didn't work
+    if pgrep -q devd 2>/dev/null; then
+        AUTOMOUNTER_DEVD=1
+        killall -q devd 2>/dev/null || true
+    fi
+    # Stop automountd too if present
+    if command -v service >/dev/null 2>&1; then
+        if service automountd onestatus 2>/dev/null; then
+            service automountd onestop 2>/dev/null || true
+        fi
+        if service autounmountd onestatus 2>/dev/null; then
+            service autounmountd onestop 2>/dev/null || true
+        fi
+    fi
+}
+
+enable_automounter() {
+    if [ -n "$AUTOMOUNTER_DEVD" ] && command -v service >/dev/null 2>&1; then
+        echo "Starting devd..."
+        service devd onestart 2>/dev/null || true
+    fi
+}
 
 # ---- Disk enumeration (shared by --list-disks and interactive selection) ----
 MIN_SIZE=2147483648  # 2GB in bytes
@@ -174,6 +195,7 @@ if [ "$CHECK_IMAGE_SOURCE" = "1" ]; then
 fi
 
 # Determine if /dev/da0 is mounted and offer image-based installation only if it is
+IMAGE_MODE=0
 if [ -n "$ARG_SOURCE" ]; then
     SRC="$ARG_SOURCE"
 else
@@ -190,12 +212,13 @@ else
             echo "Image-based install: copying from $MP"
             SRC="$MP"
         else
-            printf "Do you want an image-based installation (copy the contents of %s) instead of copying /? [y/N]: " "$MP"
+            printf "Perform image-based installation (like Live system)? [y/N]: "
             read -r image_ans
             case "$image_ans" in
                 [Yy]*)
                     echo "Image-based install: copying from $MP"
                     SRC="$MP"
+                    IMAGE_MODE=1
                     ;;
                 *) SRC="/" ;;
             esac
@@ -353,6 +376,9 @@ report_progress "Preparing" 5 "Unmounting existing partitions..."
 umount_disk_partitions "$DISK"
 umount_recursive
 
+# Disable automounter to prevent interference
+disable_automounter
+
 report_progress "Partitioning" 8 "Destroying old partition table..."
 echo "Destroying old partition table..."
 gpart destroy -F "$DISK" 2>/dev/null || true
@@ -397,19 +423,24 @@ if [ "$BOOT_METHOD" = "UEFI" ]; then
     mount -t msdosfs "$EFI_PART" "$MNT/efi"
 fi
 
-# Create all needed directories
-report_progress "Mounting" 24 "Creating directory structure..."
-echo "Creating directories..."
-for d in dev proc run tmp var/run var/tmp var/cache; do
-    mkdir -p "$MNT/$d"
-done
-chmod 1777 "$MNT/tmp" "$MNT/var/tmp"
+# Re-enable automounter now that filesystems are mounted
+enable_automounter
 
 report_progress "Copying" 25 "Starting system copy from $SRC..."
 echo "Copying system from $SRC to $MNT..."
 
 # Exclude runtime dirs
 EXCLUDES="dev proc sys tmp mnt media efi run var/run var/tmp var/cache compat"
+
+# For non-image installations, also exclude /Local (it will be initialized with dscli init
+# because DirectoryServices requires specific permissions and ownership that are hard to preserve during copying)
+if [ "$IMAGE_MODE" = "0" ]; then
+    EXCLUDES="$EXCLUDES Local"
+    if [ -n "$MP" ]; then
+        EXCLUDES="$EXCLUDES boot"
+    fi
+fi
+
 EXCLUDE_ARGS=""
 for d in $EXCLUDES; do
     EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude=$d"
@@ -451,6 +482,31 @@ fi
 for d in $EXCLUDES; do
     mkdir -p "$MNT/$d"
 done
+chmod 1777 "$MNT/tmp"
+
+# For non-image installations, copy /boot from the ISO
+if [ "$IMAGE_MODE" = "0" ] && [ -n "$MP" ]; then
+    if [ -d "$MP/boot" ]; then
+        report_progress "Copying" 82 "Copying boot files from ISO..."
+        echo "Copying /boot from ISO location $MP..."
+        mkdir -p "$MNT/boot"
+        cp -a "$MP/boot"/* "$MNT/boot/"
+    fi
+fi
+
+# For non-image installations, initialize /Local with dscli init in chroot
+# This creates the default user "admin" with password "admin" and sets up DirectoryServices properly
+if [ "$IMAGE_MODE" = "0" ]; then
+    report_progress "Finalizing" 84 "Initializing system with dscli init..."
+    if [ -d "$MNT/Local" ]; then
+        echo "Wiping existing /Local in chroot before dscli init..."
+        rm -rf "$MNT/Local"
+    fi
+    echo "Running dscli init in chroot..."
+    chroot "$MNT" /bin/sh -c '. /System/Library/Makefiles/GNUstep.sh && /System/Library/Tools/dscli init' || true
+    echo "Restarting dshelper in chroot..."
+    chroot "$MNT" service dshelper restart || true
+fi
 
 # Install bootloader
 report_progress "Bootloader" 82 "Installing bootloader..."
@@ -505,7 +561,15 @@ report_progress "Finalizing" 96 "Syncing filesystems..."
 sync
 
 report_progress "Finalizing" 98 "Unmounting target..."
+# Unmount any bind mounts first
+for dir in dev proc; do
+    umount -f "$MNT/$dir" 2>/dev/null || true
+    mkdir -p "$MNT/$dir"
+done
 umount_recursive
+
+# Re-enable automounter now that we're done
+enable_automounter
 
 report_progress "Complete" 100 "Installation complete."
 echo "=== COMPLETE ==="
