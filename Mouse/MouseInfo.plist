@@ -1,0 +1,9 @@
+{
+    CFBundleIdentifier = "org.gershwin.mouse.prefpane";
+    NOTE = "Automatically generated";
+    NSExecutable = Mouse;
+    NSMainNibFile = "";
+    NSPrefPaneIconFile = "Mouse.png";
+    NSPrefPaneIconLabel = "Mouse";
+    NSPrincipalClass = MousePane;
+}
