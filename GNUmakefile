@@ -28,7 +28,7 @@ $(SUBDIRS):
 	   ( [ -f "$@/GNUmakefile.in" ] && ( [ ! -f "$@/GNUmakefile" ] || [ "$@/GNUmakefile.in" -nt "$@/GNUmakefile" ] ) ); then \
 		$(call run_configure,$@); \
 	fi; \
-	$(MAKE) -C $@ || true;
+	$(MAKE) -C $@;
 	@echo "Leaving $@"
 
 # Clean every subdir (non-fatal)
