@@ -1,0 +1,9 @@
+{
+    CFBundleIdentifier = "org.gershwin.energy.prefpane";
+    NOTE = "Automatically generated";
+    NSExecutable = Energy;
+    NSMainNibFile = "";
+    NSPrefPaneIconFile = "Energy.png";
+    NSPrefPaneIconLabel = "Energy";
+    NSPrincipalClass = EnergyPane;
+}
