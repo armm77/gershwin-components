@@ -941,6 +941,29 @@ static double _parseSizeBefore(NSString *line, NSString *marker)
               }
             }
         }
+
+      // OpenBSD pkg_add -V: line containing "n/m" (bare fraction)
+      {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+          [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSArray *toks = [trimmed componentsSeparatedByCharactersInSet:
+          [NSCharacterSet characterSetWithCharactersInString:@" :"]];
+        for (NSString *tok in toks)
+          {
+            NSArray *parts = [tok componentsSeparatedByString:@"/"];
+            if ([parts count] == 2)
+              {
+                CGFloat n = [parts[0] floatValue];
+                CGFloat m = [parts[1] floatValue];
+                if (n >= 1.0 && m >= n && m <= 999)
+                  {
+                    [_progressBar setIndeterminate:NO];
+                    [_progressBar setDoubleValue:0.75 + (n / m) * 0.25];
+                    [_progressBar displayIfNeeded];
+                  }
+              }
+          }
+      }
     }
   });
 }

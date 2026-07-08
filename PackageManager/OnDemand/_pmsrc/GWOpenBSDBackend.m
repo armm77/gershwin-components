@@ -91,10 +91,10 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
 
   // Install packages from repositories
   if ([packageNames count] > 0) {
-    NSMutableArray *args = [NSMutableArray arrayWithArray:@[@"-A", @"-E", kPkgAddPath]];
+    NSMutableArray *args = [NSMutableArray arrayWithArray:@[@"-A", @"-E", kPkgAddPath, @"-V"]];
     [args addObjectsFromArray:packageNames];
 
-    NSLog(@"GWOpenBSDBackend -> pkg_add %@", packageNames);
+    NSLog(@"GWOpenBSDBackend -> pkg_add -V %@", packageNames);
     NSString *stderr = nil;
     int status = [_executor execute:kSudoPath
                           arguments:args
