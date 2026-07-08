@@ -1,5 +1,8 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
+GNUSTEP_SYSTEM_APPS := $(GNUSTEP_SYSTEM_APPS)/Utilities
+GNUSTEP_LOCAL_APPS := $(GNUSTEP_LOCAL_APPS)/Utilities
+
 # Application configuration
 APP_NAME = NetworkSetupAssistant
 
