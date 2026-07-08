@@ -385,13 +385,8 @@ id menu_drawRectWithoutBottomLine(id self, SEL cmd __attribute__((unused)), NSRe
         return;
     }
 
-    __weak typeof(self) weakSelf = self;
     dispatch_source_set_event_handler(source, ^{
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) {
-            return;
-        }
-        [strongSelf handleTerminationSignal:sig];
+        [self handleTerminationSignal:sig];
     });
     dispatch_resume(source);
     if (terminationSignalSourceCount < 3) {
