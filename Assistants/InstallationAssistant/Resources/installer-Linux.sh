@@ -225,6 +225,22 @@ enable_automounter() {
     fi
 }
 
+kill_fuse_by_dev() {
+  d=$1; [ -z "$d" ] && return 1
+  pids=
+  if command -v ps >/dev/null 2>&1; then
+    pids=$(ps -axww -o pid= -o command= 2>/dev/null |
+      awk -v d="$d" '{
+        s=$0; l=tolower(s);
+        if (l ~ /(fuse|lklfuse)/ && index(s,d)) print $1
+      }')
+  fi
+  [ -z "$pids" ] && return 0
+  echo "$pids" | while IFS= read -r pid; do [ -n "$pid" ] && kill "$pid" 2>/dev/null; done
+  sleep 2
+  echo "$pids" | while IFS= read -r pid; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null; done
+}
+
 umount_recursive() {
     # Unmount everything under $MNT
     mount | grep "$MNT" | awk '{print $3}' | sort -r | while read -r mp; do
@@ -350,6 +366,7 @@ report_progress "Preparing" 5 "Unmounting existing partitions..."
 if [ "$DEBUG" = "1" ]; then set -x; fi
 
 # Cleanup
+kill_fuse_by_dev "$DISK"
 umount_disk_partitions "$DISK"
 umount_recursive
 mkdir -p "$MNT"
