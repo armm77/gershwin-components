@@ -106,13 +106,19 @@ Menu_LDFLAGS += -Wl,--export-dynamic -L/System/Library/Libraries -Wl,-rpath,/Sys
 
 # Platform-specific flags for Linux and BSD - configured by configure script
 UNAME_S := $(shell uname -s)
+DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1 2>/dev/null || echo "-I/usr/include/dbus-1.0 -I/usr/lib/dbus-1.0/include")
 ifeq ($(UNAME_S),Linux)
 	ADDITIONAL_OBJCFLAGS = -Wall -Wextra -O2 -fobjc-runtime=gnustep-2.0 -fobjc-arc -Wno-unused-parameter -D_GNU_SOURCE
-	ADDITIONAL_CPPFLAGS =  -I/usr/include/dbus-1.0 -I/usr/lib/aarch64-linux-gnu/dbus-1.0/include
+	ADDITIONAL_CPPFLAGS = $(DBUS_CFLAGS)
 endif
 ifeq ($(UNAME_S),FreeBSD)
 	ADDITIONAL_OBJCFLAGS = -Wall -Wextra -O2 -fobjc-runtime=gnustep-2.0 -fobjc-arc -Wno-unused-parameter -D_BSD_SOURCE
-	ADDITIONAL_CPPFLAGS =  -I/usr/include/dbus-1.0 -I/usr/lib/aarch64-linux-gnu/dbus-1.0/include
+	ADDITIONAL_CPPFLAGS = $(DBUS_CFLAGS)
+	Menu_TOOL_LIBS += -lexecinfo
+endif
+ifeq ($(UNAME_S),OpenBSD)
+	ADDITIONAL_OBJCFLAGS = -Wall -Wextra -O2 -fobjc-runtime=gnustep-2.0 -fobjc-arc -Wno-unused-parameter
+	ADDITIONAL_CPPFLAGS = $(DBUS_CFLAGS)
 	Menu_TOOL_LIBS += -lexecinfo
 endif
 
