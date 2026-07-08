@@ -43,5 +43,6 @@
 + (NSArray *)kernelExtensions;
 + (NSString *)initSystem;
 + (NSArray *)deviceTreeInfo;
++ (NSArray *)energyInfo;
 
 @end

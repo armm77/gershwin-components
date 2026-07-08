@@ -1477,4 +1477,245 @@ static void _walkDTDir(NSString *dirPath, NSString *relPath, NSMutableArray *pai
 	return pairs;
 }
 
++ (NSString *)_readFile:(NSString *)path
+{
+	NSString *s = [NSString stringWithContentsOfFile:path
+	                                       encoding:NSUTF8StringEncoding
+	                                          error:NULL];
+	return [s stringByTrimmingCharactersInSet:
+		[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
++ (NSString *)_runCmd:(NSString *)cmd
+{
+	FILE *fp = popen([cmd UTF8String], "r");
+	if (!fp) return @"";
+	char line[512];
+	if (!fgets(line, sizeof(line), fp)) { pclose(fp); return @""; }
+	char *end = strpbrk(line, "\n\r"); if (end) *end = '\0';
+	pclose(fp);
+	return [NSString stringWithUTF8String:line];
+}
+
++ (NSArray *)energyInfo
+{
+	NSMutableArray *pairs = [NSMutableArray array];
+#if defined(__linux__)
+	NSString *acOnline = [self _readFile:@"/sys/class/power_supply/AC/online"];
+	NSString *battCap = [self _readFile:@"/sys/class/power_supply/BAT0/capacity"];
+	NSString *battStatus = [self _readFile:@"/sys/class/power_supply/BAT0/status"];
+	NSString *manufacturer = [self _readFile:@"/sys/class/power_supply/BAT0/manufacturer"];
+	NSString *modelName = [self _readFile:@"/sys/class/power_supply/BAT0/model_name"];
+	NSString *technology = [self _readFile:@"/sys/class/power_supply/BAT0/technology"];
+	NSString *serialNum = [self _readFile:@"/sys/class/power_supply/BAT0/serial_number"];
+	NSString *cycleCount = [self _readFile:@"/sys/class/power_supply/BAT0/cycle_count"];
+	NSString *capacityLevel = [self _readFile:@"/sys/class/power_supply/BAT0/capacity_level"];
+
+	NSString *energyFull = [self _readFile:@"/sys/class/power_supply/BAT0/energy_full"];
+	NSString *energyFullDesign = [self _readFile:@"/sys/class/power_supply/BAT0/energy_full_design"];
+	NSString *energyNow = [self _readFile:@"/sys/class/power_supply/BAT0/energy_now"];
+
+	NSString *source = [acOnline isEqualToString:@"1"] ? @"AC Power" : @"Battery";
+	[pairs addObject:@[@"Power Source:", source]];
+
+	if ([battCap length] > 0) {
+		[pairs addObject:@[@"Battery Charge:", [NSString stringWithFormat:@"%@%%", battCap]]];
+	}
+	if ([battStatus length] > 0) {
+		[pairs addObject:@[@"Battery Status:", [battStatus capitalizedString]]];
+	}
+	if ([manufacturer length] > 0) {
+		[pairs addObject:@[@"Battery Manufacturer:", manufacturer]];
+	}
+	if ([modelName length] > 0) {
+		[pairs addObject:@[@"Battery Model:", modelName]];
+	}
+	if ([technology length] > 0) {
+		[pairs addObject:@[@"Battery Technology:", technology]];
+	}
+	if ([serialNum length] > 0) {
+		[pairs addObject:@[@"Battery Serial:", serialNum]];
+	}
+	if ([cycleCount length] > 0) {
+		[pairs addObject:@[@"Cycle Count:", cycleCount]];
+	}
+	if ([capacityLevel length] > 0) {
+		[pairs addObject:@[@"Capacity Level:", capacityLevel]];
+	}
+
+	/* Health: energy_full / energy_full_design */
+	if ([energyFullDesign doubleValue] > 0) {
+		double health = ([energyFull doubleValue] / [energyFullDesign doubleValue]) * 100.0;
+		[pairs addObject:@[@"Battery Health:",
+			[NSString stringWithFormat:@"%.1f%%", health]]];
+	}
+
+	/* Charge energy now vs full */
+	if ([energyFull doubleValue] > 0 && [energyNow doubleValue] > 0) {
+		double remaining = ([energyNow doubleValue] / [energyFull doubleValue]) * 100.0;
+		[pairs addObject:@[@"Charge Remaining:",
+			[NSString stringWithFormat:@"%.1f%%", remaining]]];
+	}
+
+	/* CPU governor */
+	NSString *gov = [self _readFile:@"/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"];
+	if ([gov length] > 0) {
+		[pairs addObject:@[@"CPU Governor:", [gov capitalizedString]]];
+	}
+
+	/* Backlight level */
+	int maxBright = [[self _readFile:@"/sys/class/backlight/intel_backlight/max_brightness"] intValue];
+	int curBright = [[self _readFile:@"/sys/class/backlight/intel_backlight/brightness"] intValue];
+	if (maxBright > 0) {
+		int pct = (curBright * 100) / maxBright;
+		[pairs addObject:@[@"Display Brightness:", [NSString stringWithFormat:@"%d%%", pct]]];
+	}
+#elif defined(__FreeBSD__)
+	/* FreeBSD: acpiconf + sysctl */
+	{
+		NSString *acline = [self _runCmd:@"/sbin/sysctl -n hw.acpi.acline"];
+		NSString *life = [self _runCmd:@"/sbin/sysctl -n hw.acpi.battery.life"];
+		NSString *state = [self _runCmd:@"/sbin/sysctl -n hw.acpi.battery.state"];
+		NSString *time = [self _runCmd:@"/sbin/sysctl -n hw.acpi.battery.time"];
+
+		NSString *source = [acline isEqualToString:@"1"] ? @"AC Power" : @"Battery";
+		[pairs addObject:@[@"Power Source:", source]];
+
+		if ([life length] > 0)
+			[pairs addObject:@[@"Battery Charge:", [life stringByAppendingString:@"%"]]];
+		if ([state length] > 0) {
+			int s = [state intValue];
+			NSString *status = (s == 1) ? @"Discharging" :
+			                  (s == 2) ? @"Charging" :
+			                  (s == 7) ? @"Charged" :
+			                  (s == 0) ? @"Idle" : state;
+			[pairs addObject:@[@"Battery Status:", status]];
+		}
+		if ([time length] > 0 && [time intValue] > 0)
+			[pairs addObject:@[@"Remaining Time:", [time stringByAppendingString:@" min"]]];
+
+		/* Try acpiconf -b 0 for extra details */
+		NSString *acpi = [self _runCmd:@"/usr/sbin/acpiconf -b 0"];
+		if ([acpi length] > 0) {
+			/* Format: "Battery 0: status, %, time" — may include manufacturer */
+			[pairs addObject:@[@"ACPI Info:", acpi]];
+		}
+	}
+
+	/* CPU frequency */
+	{
+		NSString *freq = [self _runCmd:@"/sbin/sysctl -n dev.cpu.0.freq 2>/dev/null"];
+		NSString *freqLevels = [self _runCmd:@"/sbin/sysctl -n dev.cpu.0.freq_levels 2>/dev/null"];
+		if ([freq length] > 0)
+			[pairs addObject:@[@"CPU Frequency:", [freq stringByAppendingString:@" MHz"]]];
+		if ([freqLevels length] > 0)
+			[pairs addObject:@[@"CPU Freq Levels:", freqLevels]];
+	}
+
+	/* Backlight */
+	{
+		NSString *b = [self _runCmd:@"/usr/local/bin/xbacklight -get 2>/dev/null"];
+		if ([b length] > 0) {
+			int pct = (int)([b doubleValue] + 0.5);
+			[pairs addObject:@[@"Display Brightness:", [NSString stringWithFormat:@"%d%%", pct]]];
+		}
+	}
+#elif defined(__OpenBSD__)
+	/* OpenBSD: apm + sysctl */
+	{
+		NSString *apmOut = [self _runCmd:@"/usr/sbin/apm"];
+		/* apm output: "Battery state: charging, 95% remaining, 1:23" */
+		if ([apmOut length] > 0) {
+			[pairs addObject:@[@"APM Info:", apmOut]];
+
+			/* Parse AC state */
+			NSString *ac = [self _runCmd:@"/usr/sbin/apm -a"];
+			[pairs addObject:@[@"Power Source:", [ac isEqualToString:@"1"] ? @"AC Power" : @"Battery"]];
+
+			NSString *pct = [self _runCmd:@"/usr/sbin/apm -l"];
+			if ([pct length] > 0)
+				[pairs addObject:@[@"Battery Charge:", [pct stringByAppendingString:@"%"]]];
+
+			NSString *status = [self _runCmd:@"/usr/sbin/apm -b"];
+			if ([status length] > 0) {
+				int s = [status intValue];
+				NSString *state = (s == 0) ? @"High" :
+				                  (s == 1) ? @"Low" :
+				                  (s == 2) ? @"Critical" :
+				                  (s == 3) ? @"Charging" : status;
+				[pairs addObject:@[@"Battery Status:", state]];
+			}
+		} else {
+			[pairs addObject:@[@"Power Source:", @"Unknown"]];
+		}
+	}
+
+	/* CPU performance via hw.setperf (0 = min, 100 = max) */
+	{
+		NSString *perf = [self _runCmd:@"/sbin/sysctl -n hw.setperf 2>/dev/null"];
+		if ([perf length] > 0) {
+			int p = [perf intValue];
+			NSString *label = (p >= 90) ? @"Performance" :
+			                  (p <= 10) ? @"Power Save" : @"Auto";
+			[pairs addObject:@[@"CPU Performance:", [NSString stringWithFormat:@"%d%% (%@)", p, label]]];
+		}
+	}
+
+	/* Backlight via wsconsctl or xbacklight */
+	{
+		NSString *b = [self _runCmd:@"/usr/sbin/wsconsctl brightness 2>/dev/null"];
+		if ([b length] == 0)
+			b = [self _runCmd:@"/usr/local/bin/xbacklight -get 2>/dev/null"];
+		if ([b length] > 0) {
+			int pct = (int)([b doubleValue] + 0.5);
+			[pairs addObject:@[@"Display Brightness:", [NSString stringWithFormat:@"%d%%", pct]]];
+		}
+	}
+#elif defined(__NetBSD__)
+	/* NetBSD: envstat + sysctl */
+	{
+		NSString *acline = [self _runCmd:@"/sbin/sysctl -n hw.acpi.acline 2>/dev/null"];
+		if ([acline length] > 0) {
+			[pairs addObject:@[@"Power Source:", [acline isEqualToString:@"1"] ? @"AC Power" : @"Battery"]];
+		} else {
+			[pairs addObject:@[@"Power Source:", @"Unknown"]];
+		}
+
+		NSString *life = [self _runCmd:@"/sbin/sysctl -n hw.acpi.battery.life 2>/dev/null"];
+		if ([life length] > 0)
+			[pairs addObject:@[@"Battery Charge:", [life stringByAppendingString:@"%"]]];
+
+		NSString *state = [self _runCmd:@"/sbin/sysctl -n hw.acpi.battery.state 2>/dev/null"];
+		if ([state length] > 0) {
+			int s = [state intValue];
+			NSString *status = (s == 1) ? @"Discharging" :
+			                  (s == 2) ? @"Charging" :
+			                  (s == 7) ? @"Charged" : state;
+			[pairs addObject:@[@"Battery Status:", status]];
+		}
+	}
+
+	/* CPU frequency */
+	{
+		NSString *freq = [self _runCmd:@"/sbin/sysctl -n machdep.cpu.frequency.current 2>/dev/null"];
+		if ([freq length] == 0)
+			freq = [self _runCmd:@"/sbin/sysctl -n machdep.dmi.processor-frequency 2>/dev/null"];
+		if ([freq length] > 0)
+			[pairs addObject:@[@"CPU Frequency:", [freq stringByAppendingString:@" MHz"]]];
+	}
+
+	/* Backlight */
+	{
+		NSString *b = [self _runCmd:@"/usr/local/bin/xbacklight -get 2>/dev/null"];
+		if ([b length] > 0) {
+			int pct = (int)([b doubleValue] + 0.5);
+			[pairs addObject:@[@"Display Brightness:", [NSString stringWithFormat:@"%d%%", pct]]];
+		}
+	}
+#else
+	[pairs addObject:@[@"Power Source:", @"Unknown"]];
+#endif
+	return pairs;
+}
+
 @end

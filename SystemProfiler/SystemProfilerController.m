@@ -151,6 +151,10 @@ static const float SP_WINDOW_HEIGHT = 500.0;
     }
     [_rootItems addObject:displays];
 
+    SPDataItem *energy = [self _categoryItemWithTitle:@"Energy"];
+    [energy setDetailPairs:[SystemInfo energyInfo]];
+    [_rootItems addObject:energy];
+
     SPDataItem *network = [self _categoryItemWithTitle:@"Network"];
     [network setDetailPairs:[self _pairsFromList:[SystemInfo networkInterfaces]]];
     [_rootItems addObject:network];
