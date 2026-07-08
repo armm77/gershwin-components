@@ -188,6 +188,16 @@ static void runTest(NSString *name, BOOL (^block)(void))
   return rc;
 }
 
+- (int)execute:(NSString *)path
+     arguments:(NSArray *)args
+ stdoutCallback:(void (^)(NSString *line))stdoutCallback
+ stderrCallback:(void (^)(NSString *line))stderrCallback
+ capturedErrorOutput:(NSString *__autoreleasing *)errorOutput
+{
+  // Delegate to the variant that captures error output, ignore stdout
+  return [self execute:path arguments:args stderrCallback:stderrCallback capturedErrorOutput:errorOutput];
+}
+
 @end
 
 #pragma mark Mock Backend
