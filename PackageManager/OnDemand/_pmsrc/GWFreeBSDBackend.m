@@ -58,7 +58,7 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     NSMutableArray *args = [NSMutableArray arrayWithArray:@[@"-A", @"-E", kPkgPath, @"add", @"-f"]];
     [args addObjectsFromArray:filePaths];
 
-    NSString *stderr = nil;
+    NSString *capturedStderr = nil;
     int status = [_executor execute:kSudoPath
                           arguments:args
                      stdoutCallback:^(NSString *line) {
@@ -69,8 +69,8 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
                        if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
                          [progressHandler installDidOutputLine:line];
                      }
-               capturedErrorOutput:&stderr];
-    _capturedErrorOutput = stderr ?: @"";
+               capturedErrorOutput:&capturedStderr];
+    _capturedErrorOutput = capturedStderr ?: @"";
     if (status != 0) {
       if (error) {
         *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
@@ -109,7 +109,7 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
           }
 
         NSLog(@"GWFreeBSDBackend -> pkg install -y %@", packageNames);
-        NSString *stderr = nil;
+        NSString *capturedStderr = nil;
         status = [_executor execute:kSudoPath
                           arguments:args
                      stdoutCallback:^(NSString *line) {
@@ -129,9 +129,9 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
                                                       message:@"Waiting for other installations to finish…"];
                          }
                      }
-               capturedErrorOutput:&stderr];
-        if (stderr)
-          _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:stderr];
+               capturedErrorOutput:&capturedStderr];
+        if (capturedStderr)
+          _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:capturedStderr];
 
         retries++;
       }
