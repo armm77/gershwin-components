@@ -6,7 +6,7 @@
  * OnDemandController — Controller for placeholder installer apps.
  *
  * Supports two resource formats:
- *   1. install.plist  — our plist format (preferred)
+ *   1. Install.plist  — our plist format (preferred)
  *   2. packages + executable text files — helloSystem legacy format
  */
 

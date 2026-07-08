@@ -6,7 +6,7 @@
  * OnDemandController — implementation.
  *
  * Supports two resource formats:
- *   1. install.plist in plist format (preferred)
+ *   1. Install.plist in plist format (preferred)
  *   2. packages (one-per-line text) + executable (single-line path) — legacy compat
  */
 
@@ -44,7 +44,7 @@ static const CGFloat kGapNormal = 16.0;
 #pragma mark - Bundle Path Resolution
 
 /// Resolve the actual .app bundle path from argv[0] so symlinked
-/// placeholders load their own Resources/install.plist rather than
+/// placeholders load their own Resources/Install.plist rather than
 /// the symlink target's bundle (OnDemand.app).
 - (NSString *)_actualBundlePath
 {
@@ -72,7 +72,7 @@ static const CGFloat kGapNormal = 16.0;
   NSLog(@"Placeholder -> setupFromBundle: appName=%@, appPath=%@", _appName, appPath);
 
   // Try plist format first
-  NSString *plistPath = [appPath stringByAppendingPathComponent:@"Resources/install.plist"];
+  NSString *plistPath = [appPath stringByAppendingPathComponent:@"Resources/Install.plist"];
   if (plistPath)
     {
       NSLog(@"Placeholder -> setupFromBundle: found plist at %@", plistPath);

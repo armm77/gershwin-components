@@ -29,7 +29,7 @@ OnDemand_OBJC_FILES = \
 
 # Resource files (plists)
 OnDemand_RESOURCE_FILES = \
-  Resources/Info.plist Resources/install.plist
+  Resources/Info.plist Resources/Install.plist
 
 # ARC throughout
 ADDITIONAL_OBJCFLAGS += -fobjc-arc -fobjc-arc-exceptions
@@ -52,10 +52,10 @@ clean::
 $(APP_NAME).app/Resources/Info.plist: Resources/Info.plist
 	mkdir -p $(@D) && cp $< $@
 
-$(APP_NAME).app/Resources/install.plist: Resources/install.plist
+$(APP_NAME).app/Resources/Install.plist: Resources/Install.plist
 	mkdir -p $(@D) && cp $< $@
 
-all:: $(APP_NAME).app/Resources/Info.plist $(APP_NAME).app/Resources/install.plist
+all:: $(APP_NAME).app/Resources/Info.plist $(APP_NAME).app/Resources/Install.plist
 
 system-install: $(APP_NAME).app
 	sudo mkdir -p /System/Library/Services

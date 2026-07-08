@@ -4,11 +4,22 @@
 <dict>
 	<key>os_overrides</key>
 	<dict>
+		<key>arch</key>
+		<dict>
+			<key>packages</key>
+			<array>
+				<string>transmission-gtk</string>
+				<string>appmenu-gtk-module</string>
+			</array>
+			<key>postinstall_command</key>
+			<string>/usr/bin/transmission-gtk</string>
+		</dict>
 		<key>freebsd</key>
 		<dict>
 			<key>packages</key>
 			<array>
 				<string>transmission</string>
+				<string>appmenu-gtk-module</string>
 			</array>
 			<key>postinstall_command</key>
 			<string>/usr/local/bin/transmission-gtk</string>
@@ -26,6 +37,7 @@
 	<key>packages</key>
 	<array>
 		<string>transmission-gtk</string>
+		<string>appmenu-gtk3-module</string>
 	</array>
 	<key>postinstall_command</key>
 	<string>/usr/bin/transmission-gtk</string>

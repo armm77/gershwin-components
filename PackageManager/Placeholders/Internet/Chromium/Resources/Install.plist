@@ -4,30 +4,42 @@
 <dict>
 	<key>os_overrides</key>
 	<dict>
+		<key>arch</key>
+		<dict>
+			<key>packages</key>
+			<array>
+				<string>chromium</string>
+				<string>appmenu-gtk-module</string>
+			</array>
+			<key>postinstall_command</key>
+			<string>/usr/bin/chromium</string>
+		</dict>
 		<key>freebsd</key>
 		<dict>
 			<key>packages</key>
 			<array>
-				<string>audacious</string>
+				<string>chromium</string>
+				<string>appmenu-gtk-module</string>
 			</array>
 			<key>postinstall_command</key>
-			<string>/usr/local/bin/audacious</string>
+			<string>/usr/local/bin/chromium</string>
 		</dict>
 		<key>openbsd</key>
 		<dict>
 			<key>packages</key>
 			<array>
-				<string>audacious</string>
+				<string>chromium</string>
 			</array>
 			<key>postinstall_command</key>
-			<string>/usr/local/bin/audacious</string>
+			<string>/usr/local/bin/chromium</string>
 		</dict>
 	</dict>
 	<key>packages</key>
 	<array>
-		<string>audacious</string>
+		<string>chromium</string>
+		<string>appmenu-gtk3-module</string>
 	</array>
 	<key>postinstall_command</key>
-	<string>/usr/bin/audacious</string>
+	<string>/usr/bin/chromium</string>
 </dict>
 </plist>

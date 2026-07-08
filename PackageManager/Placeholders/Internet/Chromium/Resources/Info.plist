@@ -5,13 +5,15 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>English</string>
   <key>CFBundleExecutable</key>
-  <string>Falkon</string>
+  <string>Chromium</string>
   <key>CFBundleIconFile</key>
-  <string>Falkon.png</string>
+  <string>Chromium.png</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Falkon</string>
+  <string>Chromium</string>
+  <key>CFBundleIdentifier</key>
+  <string>org.chromium.Chromium</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

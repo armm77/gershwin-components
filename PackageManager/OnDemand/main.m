@@ -5,7 +5,7 @@
  *
  * OnDemand — Placeholder on-demand installer application.
  *
- * Reads its embedded install.plist, checks if the target command
+ * Reads its embedded Install.plist, checks if the target command
  * exists, installs packages if needed, then launches the command.
  */
 

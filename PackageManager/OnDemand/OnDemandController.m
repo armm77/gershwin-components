@@ -6,7 +6,7 @@
  * OnDemandController implementation.
  *
  * Flow:
- *   setupFromPlist -> reads install.plist from bundle
+ *   setupFromPlist -> reads Install.plist from bundle
  *   showWindow -> creates and displays progress UI
  *   performInstallAndLaunch ->
  *     1. Check if postinstall_command exists
@@ -143,7 +143,7 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
 }
 
 /// Resolve the actual .app bundle path from argv[0] so symlinked
-/// placeholders load their own Resources/install.plist rather than
+/// placeholders load their own Resources/Install.plist rather than
 /// the symlink target's bundle (OnDemand.app).
 - (NSString *)_actualBundlePath
 {
@@ -167,12 +167,12 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
 - (BOOL)setupFromPlist
 {
   NSString *appPath = [self _actualBundlePath];
-  _plistPath = [appPath stringByAppendingPathComponent:@"Resources/install.plist"];
+  _plistPath = [appPath stringByAppendingPathComponent:@"Resources/Install.plist"];
   NSLog(@"OnDemand -> setupFromPlist: appPath=%@, plist=%@", appPath, _plistPath);
 
   if (!_plistPath)
     {
-      NSLog(@"OnDemand [FAIL] setupFromPlist: install.plist not found at %@", _plistPath);
+      NSLog(@"OnDemand [FAIL] setupFromPlist: Install.plist not found at %@", _plistPath);
       return NO;
     }
 

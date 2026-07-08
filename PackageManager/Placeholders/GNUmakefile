@@ -1,6 +1,6 @@
 # Placeholder wrapper apps organized by category
 #
-# Source: <Category>/<SafeName>/Resources/{Info.plist,install.plist,<SafeName>.png}
+# Source: <Category>/<SafeName>/Resources/{Info.plist,Install.plist,<SafeName>.png}
 # Build:  <Category>/<SafeName>.app/
 # Install: /System/Applications/<Category>/<DisplayName>.app/
 
@@ -19,7 +19,7 @@ $(1):
 	  sdir="$$$$cat/$$$$app"; \
 	  mkdir -p "$$$$bdir/Resources"; \
 	  [ -f "$$$$sdir/Resources/Info.plist" ] && cp "$$$$sdir/Resources/Info.plist" "$$$$bdir/Resources/"; \
-	  [ -f "$$$$sdir/Resources/install.plist" ] && cp "$$$$sdir/Resources/install.plist" "$$$$bdir/Resources/"; \
+	  [ -f "$$$$sdir/Resources/Install.plist" ] && cp "$$$$sdir/Resources/Install.plist" "$$$$bdir/Resources/"; \
 	  [ -f "$$$$sdir/Resources/$$$$app.png" ] && cp "$$$$sdir/Resources/$$$$app.png" "$$$$bdir/Resources/"; \
 	  ln -sf ../../../OnDemand/OnDemand.app/OnDemand "$$$$bdir/$$$$app"; \
 	done
@@ -51,7 +51,7 @@ $(eval $(call make-category,3D_Printing,3D Printing,FreeCAD PrusaSlicer Ultimake
 $(eval $(call make-category,Audio,Audio,Audacious Audacity LMMS MuseScore))
 $(eval $(call make-category,Developer,Developer,Zeal))
 $(eval $(call make-category,Graphics,Graphics,Blender GIMP Inkscape Krita Scribus Skanlite))
-$(eval $(call make-category,Internet,Internet,Falkon Firefox Thunderbird Transmission))
+$(eval $(call make-category,Internet,Internet,Chromium Firefox Thunderbird Transmission))
 $(eval $(call make-category,Office,Office,LibreOffice))
 $(eval $(call make-category,Video,Video,OBS_Studio Shotcut))
 
@@ -60,7 +60,7 @@ $(eval $(call make-install,3D_Printing,3D Printing,FreeCAD PrusaSlicer Ultimaker
 $(eval $(call make-install,Audio,Audio,Audacious Audacity LMMS MuseScore))
 $(eval $(call make-install,Developer,Developer,Zeal))
 $(eval $(call make-install,Graphics,Graphics,Blender GIMP Inkscape Krita Scribus Skanlite))
-$(eval $(call make-install,Internet,Internet,Falkon Firefox Thunderbird Transmission))
+$(eval $(call make-install,Internet,Internet,Chromium Firefox Thunderbird Transmission))
 $(eval $(call make-install,Office,Office,LibreOffice))
 $(eval $(call make-install,Video,Video,OBS_Studio Shotcut))
 
