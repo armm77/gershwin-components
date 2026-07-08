@@ -86,7 +86,6 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     }
   }
 
-  __block BOOL waitingWasReported = NO;
   [progressHandler installDidProgress:0.05f message:@"Installing packages..."];
 
   // Install packages from repositories
@@ -94,34 +93,56 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     NSMutableArray *args = [NSMutableArray arrayWithArray:@[@"-A", @"-E", kAPTGetPath, @"install", @"-y"]];
     [args addObjectsFromArray:packageNames];
 
-    NSLog(@"GWDebBackend -> apt-get install -y %@", packageNames);
-    NSString *aptStderr = nil;
-    int status = [_executor execute:kSudoPath
+    int status = 0;
+    int retries = 0;
+    const int maxRetries = 30;
+    __block BOOL waitingWasReported = NO;
+
+    do
+      {
+        waitingWasReported = NO;
+
+        if (retries > 0)
+          {
+            NSLog(@"GWDebBackend -> lock detected, retrying (%d/%d)...", retries, maxRetries);
+            [NSThread sleepForTimeInterval:2.0];
+            [progressHandler installDidProgress:0.5f
+                                       message:@"Waiting for other installations to finish…"];
+          }
+
+        NSLog(@"GWDebBackend -> apt-get install -y %@", packageNames);
+        NSString *aptStderr = nil;
+        status = [_executor execute:kSudoPath
                           arguments:args
                      stdoutCallback:^(NSString *line)
-    {
-      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
-        [progressHandler installDidOutputLine:line];
-    }
-                     stderrCallback:^(NSString *line)
-    {
-      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
-        [progressHandler installDidOutputLine:line];
-
-      // Detect when apt is waiting for another process to release the lock
-      if (!waitingWasReported &&
-          [line rangeOfString:@"Waiting for cache lock"
-                     options:NSCaseInsensitiveSearch].location != NSNotFound)
         {
-          waitingWasReported = YES;
-          [progressHandler installDidProgress:0.5f
-                                     message:@"Waiting for other installations to finish…"];
+          if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+            [progressHandler installDidOutputLine:line];
         }
-    }
-               capturedErrorOutput:&aptStderr];
+                     stderrCallback:^(NSString *line)
+        {
+          if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+            [progressHandler installDidOutputLine:line];
 
-    if (aptStderr)
-      _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:aptStderr];
+          if (!waitingWasReported &&
+              ([line rangeOfString:@"Waiting for cache lock"
+                          options:NSCaseInsensitiveSearch].location != NSNotFound ||
+               [line rangeOfString:@"Could not get lock"
+                          options:NSCaseInsensitiveSearch].location != NSNotFound))
+            {
+              waitingWasReported = YES;
+              [progressHandler installDidProgress:0.5f
+                                         message:@"Waiting for other installations to finish…"];
+            }
+        }
+                   capturedErrorOutput:&aptStderr];
+
+        if (aptStderr)
+          _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:aptStderr];
+
+        retries++;
+      }
+    while (status != 0 && waitingWasReported && retries < maxRetries);
 
     NSLog(@"GWDebBackend <- apt-get exit code: %d", status);
     if (status != 0) {

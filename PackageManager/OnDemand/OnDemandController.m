@@ -976,6 +976,13 @@ static double _parseSizeBefore(NSString *line, NSString *marker)
   [[_logController window] makeKeyAndOrderFront:nil];
 }
 
+#pragma mark - About Dialog
+
+- (void)showAbout:(id)sender
+{
+  [NSApp orderFrontStandardAboutPanel:sender];
+}
+
 #pragma mark - NSApplicationDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note
@@ -996,7 +1003,7 @@ static double _parseSizeBefore(NSString *line, NSString *marker)
   [mainMenu addItem:appMenuItem];
   NSMenu *appMenu = [[NSMenu alloc] initWithTitle:appName];
   [appMenu addItemWithTitle:@"About"
-                     action:@selector(orderFrontStandardAboutPanel:)
+                     action:@selector(showAbout:)
               keyEquivalent:@""];
   [appMenu addItem:[NSMenuItem separatorItem]];
   [appMenu addItemWithTitle:@"Quit"

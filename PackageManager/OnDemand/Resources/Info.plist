@@ -6,6 +6,8 @@
     <string>English</string>
     <key>CFBundleExecutable</key>
     <string>OnDemand</string>
+    <key>CFBundleGetInfoString</key>
+    <string>OnDemand 1.0, Copyright © 2026 Simon Peter. BSD 2-Clause License.</string>
     <key>CFBundleIdentifier</key>
     <string>org.gershwin.OnDemand</string>
     <key>CFBundleInfoDictionaryVersion</key>
@@ -19,7 +21,7 @@
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2026 Simon Peter. BSD-2-Clause License.</string>
+    <string>Copyright © 2026 Simon Peter. BSD 2-Clause License.</string>
     <key>NSMainNibFile</key>
     <string></string>
     <key>NSPrincipalClass</key>
@@ -35,7 +37,7 @@
         <string>Simon Peter</string>
     </array>
     <key>Copyright</key>
-    <string>Copyright (C) 2026 Simon Peter</string>
+    <string>Copyright © 2026 Simon Peter. BSD 2-Clause License.</string>
     <key>FullVersionID</key>
     <string>1.0</string>
 </dict>

@@ -50,4 +50,7 @@
 // Show the installer log window
 - (void)showLog:(id)sender;
 
+// Show the About dialog
+- (void)showAbout:(id)sender;
+
 @end

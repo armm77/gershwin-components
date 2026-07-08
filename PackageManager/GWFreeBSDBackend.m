@@ -91,9 +91,26 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     NSMutableArray *args = [NSMutableArray arrayWithArray:@[@"-A", @"-E", kPkgPath, @"install", @"-y"]];
     [args addObjectsFromArray:packageNames];
 
-    NSLog(@"GWFreeBSDBackend -> pkg install -y %@", packageNames);
-    NSString *stderr = nil;
-    int status = [_executor execute:kSudoPath
+    int status = 0;
+    int retries = 0;
+    const int maxRetries = 30;
+    __block BOOL waitingWasReported = NO;
+
+    do
+      {
+        waitingWasReported = NO;
+
+        if (retries > 0)
+          {
+            NSLog(@"GWFreeBSDBackend -> lock detected, retrying (%d/%d)...", retries, maxRetries);
+            [NSThread sleepForTimeInterval:2.0];
+            [progressHandler installDidProgress:0.5f
+                                       message:@"Waiting for other installations to finish…"];
+          }
+
+        NSLog(@"GWFreeBSDBackend -> pkg install -y %@", packageNames);
+        NSString *stderr = nil;
+        status = [_executor execute:kSudoPath
                           arguments:args
                      stdoutCallback:^(NSString *line) {
                        if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
@@ -102,10 +119,24 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
                      stderrCallback:^(NSString *line) {
                        if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
                          [progressHandler installDidOutputLine:line];
+
+                       if (!waitingWasReported &&
+                           [line rangeOfString:@"database is locked"
+                                      options:NSCaseInsensitiveSearch].location != NSNotFound)
+                         {
+                           waitingWasReported = YES;
+                           [progressHandler installDidProgress:0.5f
+                                                      message:@"Waiting for other installations to finish…"];
+                         }
                      }
                capturedErrorOutput:&stderr];
-    if (stderr)
-      _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:stderr];
+        if (stderr)
+          _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:stderr];
+
+        retries++;
+      }
+    while (status != 0 && waitingWasReported && retries < maxRetries);
+
     NSLog(@"GWFreeBSDBackend <- pkg exit code: %d", status);
     if (status != 0) {
       if (error) {
