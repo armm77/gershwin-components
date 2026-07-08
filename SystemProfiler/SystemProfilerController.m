@@ -155,6 +155,10 @@ static const float SP_WINDOW_HEIGHT = 500.0;
     [energy setDetailPairs:[SystemInfo energyInfo]];
     [_rootItems addObject:energy];
 
+    SPDataItem *bt = [self _categoryItemWithTitle:@"Bluetooth"];
+    [bt setDetailPairs:[SystemInfo bluetoothInfo]];
+    [_rootItems addObject:bt];
+
     SPDataItem *network = [self _categoryItemWithTitle:@"Network"];
     [network setDetailPairs:[self _pairsFromList:[SystemInfo networkInterfaces]]];
     [_rootItems addObject:network];

@@ -1718,4 +1718,85 @@ static void _walkDTDir(NSString *dirPath, NSString *relPath, NSMutableArray *pai
 	return pairs;
 }
 
++ (NSArray *)bluetoothInfo
+{
+	NSMutableArray *pairs = [NSMutableArray array];
+#if defined(__linux__)
+	NSString *show = [self _runCmd:@"/usr/bin/bluetoothctl -- show 2>/dev/null"];
+	if ([show length] > 0) {
+		NSString *addr = @"";
+		NSString *name = @"";
+		BOOL powered = NO;
+		BOOL discoverable = NO;
+		BOOL pairable = NO;
+		for (NSString *line in [show componentsSeparatedByString:@"\n"]) {
+			NSString *t = [line stringByTrimmingCharactersInSet:
+				[NSCharacterSet whitespaceCharacterSet]];
+			if ([t hasPrefix:@"Controller "]) {
+				addr = [[t componentsSeparatedByString:@" "] objectAtIndex:1];
+				[pairs addObject:@[@"Adapter Address:", addr]];
+			} else if ([t hasPrefix:@"Name:"]) {
+				name = [[t substringFromIndex:5]
+					stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+				[pairs addObject:@[@"Adapter Name:", name]];
+			} else if ([t hasPrefix:@"Alias:"]) {
+				NSString *alias = [[t substringFromIndex:6]
+					stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+				[pairs addObject:@[@"Alias:", alias]];
+			} else if ([t isEqualToString:@"Powered: yes"]) {
+				powered = YES;
+			} else if ([t isEqualToString:@"Discoverable: yes"]) {
+				discoverable = YES;
+			} else if ([t isEqualToString:@"Pairable: yes"]) {
+				pairable = YES;
+			}
+		}
+		[pairs addObject:@[@"Powered:", powered ? @"Yes" : @"No"]];
+		[pairs addObject:@[@"Discoverable:", discoverable ? @"Yes" : @"No"]];
+		[pairs addObject:@[@"Pairable:", pairable ? @"Yes" : @"No"]];
+
+		NSString *paired = [self _runCmd:@"/usr/bin/bluetoothctl -- devices Paired 2>/dev/null"];
+		if ([paired length] > 0) {
+			int count = 0;
+			for (NSString *line in [paired componentsSeparatedByString:@"\n"]) {
+				if ([line hasPrefix:@"Device "]) count++;
+			}
+			[pairs addObject:@[@"Paired Devices:", [NSString stringWithFormat:@"%d", count]]];
+		}
+
+		NSString *connected = [self _runCmd:@"/usr/bin/bluetoothctl -- devices Connected 2>/dev/null"];
+		if ([connected length] > 0) {
+			int count = 0;
+			for (NSString *line in [connected componentsSeparatedByString:@"\n"]) {
+				if ([line hasPrefix:@"Device "]) count++;
+			}
+			[pairs addObject:@[@"Connected Devices:", [NSString stringWithFormat:@"%d", count]]];
+		}
+	} else {
+		[pairs addObject:@[@"Bluetooth:", @"Not available"]];
+	}
+#elif defined(__FreeBSD__)
+	NSString *bdaddr = [self _runCmd:@"/usr/sbin/hccontrol -n ubt0hci read_node_bd_addr 2>/dev/null"];
+	if ([bdaddr length] > 0) {
+		[pairs addObject:@[@"Adapter:", bdaddr]];
+		NSString *ver = [self _runCmd:@"/usr/sbin/hccontrol -n ubt0hci read_local_version_information 2>/dev/null"];
+		if ([ver length] > 0)
+			[pairs addObject:@[@"Version:", ver]];
+		NSString *name = [self _runCmd:@"/usr/sbin/hccontrol -n ubt0hci read_local_name 2>/dev/null"];
+		if ([name length] > 0)
+			[pairs addObject:@[@"Name:", name]];
+		NSString *conns = [self _runCmd:@"/usr/sbin/hccontrol -n ubt0hci read_connection_list 2>/dev/null"];
+		if ([conns length] > 0)
+			[pairs addObject:@[@"Connections:", conns]];
+	} else {
+		[pairs addObject:@[@"Bluetooth:", @"Not available"]];
+	}
+#elif defined(__OpenBSD__) || defined(__NetBSD__)
+	[pairs addObject:@[@"Bluetooth:", @"Not available on this platform"]];
+#else
+	[pairs addObject:@[@"Bluetooth:", @"Not available"]];
+#endif
+	return pairs;
+}
+
 @end

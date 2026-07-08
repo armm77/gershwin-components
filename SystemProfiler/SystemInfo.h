@@ -44,5 +44,6 @@
 + (NSString *)initSystem;
 + (NSArray *)deviceTreeInfo;
 + (NSArray *)energyInfo;
++ (NSArray *)bluetoothInfo;
 
 @end

@@ -1,0 +1,9 @@
+{
+    CFBundleIdentifier = "org.gershwin.bluetooth.prefpane";
+    NOTE = "Automatically generated";
+    NSExecutable = Bluetooth;
+    NSMainNibFile = "";
+    NSPrefPaneIconFile = "Bluetooth.png";
+    NSPrefPaneIconLabel = "Bluetooth";
+    NSPrincipalClass = BluetoothPane;
+}
