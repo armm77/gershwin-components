@@ -12,6 +12,8 @@
 #import "../GWPackageManager.h"
 #import "../GWPackageInstallSpec.h"
 
+@class ODLogWindowController;
+
 @interface OnDemandController : NSObject <NSApplicationDelegate, GWInstallProgressHandler>
 {
   NSWindow *_window;
@@ -22,17 +24,12 @@
   NSButton *_installButton;
   NSTextField *_descriptionField;
 
-  // Details disclosure UI
-  NSButton *_detailsToggle;
-  NSScrollView *_detailsScrollView;
-  NSTextView *_detailsTextView;
-  BOOL _detailsVisible;
-
   GWPackageManager *_pm;
   GWPackageInstallSpec *_spec;
   NSString *_plistPath;
   NSString *_appName;
   BOOL _dpkgRetried;
+  ODLogWindowController *_logController;
 }
 
 // Read the install plist from the app bundle
@@ -49,5 +46,8 @@
 
 // Install packages then launch (call after showWindow)
 - (void)performInstallAndLaunch;
+
+// Show the installer log window
+- (void)showLog:(id)sender;
 
 @end

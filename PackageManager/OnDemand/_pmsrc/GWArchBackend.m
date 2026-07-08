@@ -60,11 +60,15 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     NSString *stderr = nil;
     int status = [_executor execute:kSudoPath
                           arguments:args
-                    stderrCallback:^(NSString *line) {
-                      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
-                        [progressHandler installDidOutputLine:line];
-                    }
-              capturedErrorOutput:&stderr];
+                     stdoutCallback:^(NSString *line) {
+                       if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                         [progressHandler installDidOutputLine:line];
+                     }
+                     stderrCallback:^(NSString *line) {
+                       if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                         [progressHandler installDidOutputLine:line];
+                     }
+               capturedErrorOutput:&stderr];
     _capturedErrorOutput = stderr ?: @"";
     if (status != 0) {
       if (error) {
@@ -79,7 +83,7 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     }
   }
 
-  [progressHandler installDidProgress:0.5f message:@"Installing packages..."];
+  [progressHandler installDidProgress:0.05f message:@"Installing packages..."];
 
   // Install packages from repositories
   if ([packageNames count] > 0) {
@@ -90,11 +94,15 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     NSString *stderr = nil;
     int status = [_executor execute:kSudoPath
                           arguments:args
-                    stderrCallback:^(NSString *line) {
-                      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
-                        [progressHandler installDidOutputLine:line];
-                    }
-              capturedErrorOutput:&stderr];
+                     stdoutCallback:^(NSString *line) {
+                       if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                         [progressHandler installDidOutputLine:line];
+                     }
+                     stderrCallback:^(NSString *line) {
+                       if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                         [progressHandler installDidOutputLine:line];
+                     }
+               capturedErrorOutput:&stderr];
     if (stderr)
       _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:stderr];
     NSLog(@"GWArchBackend <- pacman exit code: %d", status);

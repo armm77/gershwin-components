@@ -62,10 +62,15 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     NSString *dpkgStderr = nil;
     int status = [_executor execute:kSudoPath
                           arguments:args
-                    stderrCallback:^(NSString *line) {
-                      [progressHandler installDidOutputLine:line];
-                    }
-              capturedErrorOutput:&dpkgStderr];
+                     stdoutCallback:^(NSString *line) {
+                       if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                         [progressHandler installDidOutputLine:line];
+                     }
+                     stderrCallback:^(NSString *line) {
+                       if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+                         [progressHandler installDidOutputLine:line];
+                     }
+               capturedErrorOutput:&dpkgStderr];
     _capturedErrorOutput = dpkgStderr ?: @"";
     NSLog(@"GWDebBackend <- dpkg exit code: %d", status);
     if (status != 0) {
@@ -82,7 +87,7 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
   }
 
   __block BOOL waitingWasReported = NO;
-  [progressHandler installDidProgress:0.5f message:@"Installing packages..."];
+  [progressHandler installDidProgress:0.05f message:@"Installing packages..."];
 
   // Install packages from repositories
   if ([packageNames count] > 0) {
@@ -93,9 +98,13 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
     NSString *aptStderr = nil;
     int status = [_executor execute:kSudoPath
                           arguments:args
-                    stderrCallback:^(NSString *line)
+                     stdoutCallback:^(NSString *line)
     {
-      // Forward raw line to the progress handler for live "Details" view
+      if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
+        [progressHandler installDidOutputLine:line];
+    }
+                     stderrCallback:^(NSString *line)
+    {
       if ([progressHandler respondsToSelector:@selector(installDidOutputLine:)])
         [progressHandler installDidOutputLine:line];
 
@@ -109,7 +118,7 @@ static NSString *const kSudoPath = @"/usr/bin/sudo";
                                      message:@"Waiting for other installations to finish…"];
         }
     }
-              capturedErrorOutput:&aptStderr];
+               capturedErrorOutput:&aptStderr];
 
     if (aptStderr)
       _capturedErrorOutput = [_capturedErrorOutput stringByAppendingString:aptStderr];

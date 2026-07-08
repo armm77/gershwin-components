@@ -87,49 +87,44 @@ static GWSystemCommandExecutor *sharedExecutor = nil;
  stderrCallback:(void (^)(NSString *line))callback
  capturedErrorOutput:(NSString *__autoreleasing *)errorOutput
 {
-  NSLog(@"GWSystemCommandExecutor -> execute (live stderr): %@ %@", path, [args componentsJoinedByString:@" "]);
+  return [self execute:path arguments:args
+        stdoutCallback:nil
+        stderrCallback:callback
+  capturedErrorOutput:errorOutput];
+}
 
-  NSTask *task = [[NSTask alloc] init];
-  [task setLaunchPath:path];
-  [task setArguments:args];
+static dispatch_source_t _streamPipe(int fd,
+                                      NSMutableString *lineBuf,
+                                      NSMutableString *captured,
+                                      void (^callback)(NSString *line),
+                                      dispatch_semaphore_t eofSem)
+{
+  dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, fd, 0,
+    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
 
-  // Capture nothing on stdout (pipe and discard)
-  [task setStandardOutput:[NSPipe pipe]];
-
-  NSPipe *errPipe = [NSPipe pipe];
-  [task setStandardError:errPipe];
-  NSFileHandle *errHandle = [errPipe fileHandleForReading];
-
-  // Accumulator for the full stderr output
-  NSMutableString *captured = [NSMutableString string];
-  // Buffer for line reassembly (stderr chunks may split lines)
-  NSMutableString *lineBuf = [NSMutableString string];
-
-  id observer = [[NSNotificationCenter defaultCenter]
-    addObserverForName:NSFileHandleReadCompletionNotification
-                object:errHandle
-                 queue:nil
-            usingBlock:^(NSNotification *note)
-  {
-    NSData *data = [[note userInfo] objectForKey:NSFileHandleNotificationDataItem];
-    if ([data length] > 0)
+  dispatch_source_set_event_handler(source, ^{
+    char buffer[4096];
+    ssize_t n = read(fd, buffer, sizeof(buffer));
+    if (n > 0)
       {
-        NSString *chunk = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        NSString *chunk = [[NSString alloc] initWithBytes:buffer length:n
+                                                encoding:NSUTF8StringEncoding];
         if (chunk)
           {
-            @synchronized(captured)
+            if (captured)
               {
-                [captured appendString:chunk];
+                @synchronized(captured)
+                  {
+                    [captured appendString:chunk];
+                  }
               }
 
-            // Split into complete lines and call back for each
             [lineBuf appendString:chunk];
             NSRange r;
             while ((r = [lineBuf rangeOfString:@"\n"]).location != NSNotFound)
               {
                 NSString *line = [lineBuf substringToIndex:r.location];
                 [lineBuf deleteCharactersInRange:NSMakeRange(0, r.location + 1)];
-                // Trim trailing carriage returns (common in terminal output)
                 line = [line stringByTrimmingCharactersInSet:
                          [NSCharacterSet characterSetWithCharactersInString:@"\r"]];
                 if (callback)
@@ -137,38 +132,76 @@ static GWSystemCommandExecutor *sharedExecutor = nil;
               }
           }
       }
-    // Re-arm for next chunk
-    [[note object] readInBackgroundAndNotify];
-  }];
+    else
+      {
+        dispatch_source_cancel(source);
+      }
+  });
+
+  dispatch_source_set_cancel_handler(source, ^{
+    if (eofSem)
+      dispatch_semaphore_signal(eofSem);
+  });
+
+  dispatch_resume(source);
+  return source;
+}
+
+- (int)execute:(NSString *)path
+     arguments:(NSArray *)args
+ stdoutCallback:(void (^)(NSString *line))stdoutCallback
+ stderrCallback:(void (^)(NSString *line))stderrCallback
+ capturedErrorOutput:(NSString *__autoreleasing *)errorOutput
+{
+  NSLog(@"GWSystemCommandExecutor -> execute (live both): %@ %@", path, [args componentsJoinedByString:@" "]);
+
+  NSTask *task = [[NSTask alloc] init];
+  [task setLaunchPath:path];
+  [task setArguments:args];
+
+  NSPipe *outPipe = [NSPipe pipe];
+  [task setStandardOutput:outPipe];
+  NSFileHandle *outHandle = [outPipe fileHandleForReading];
+
+  NSPipe *errPipe = [NSPipe pipe];
+  [task setStandardError:errPipe];
+  NSFileHandle *errHandle = [errPipe fileHandleForReading];
+
+  NSMutableString *captured = [NSMutableString string];
+  NSMutableString *outBuf = [NSMutableString string];
+  NSMutableString *errBuf = [NSMutableString string];
+
+  dispatch_semaphore_t outSem = dispatch_semaphore_create(0);
+  dispatch_semaphore_t errSem = dispatch_semaphore_create(0);
+  __block dispatch_source_t outSource = nil;
+  __block dispatch_source_t errSource = nil;
+
+  outSource = _streamPipe([outHandle fileDescriptor], outBuf, nil,
+                          stdoutCallback, outSem);
+  errSource = _streamPipe([errHandle fileDescriptor], errBuf, captured,
+                          stderrCallback, errSem);
 
   @try
     {
       [task launch];
-      // Prime the async read
-      [errHandle readInBackgroundAndNotify];
-
-      // Pump the run loop on this thread while the task runs
-      while ([task isRunning])
-        {
-          [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                                   beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
-        }
-
+      dispatch_semaphore_wait(outSem, DISPATCH_TIME_FOREVER);
+      dispatch_semaphore_wait(errSem, DISPATCH_TIME_FOREVER);
       [task waitUntilExit];
     }
   @catch (NSException *e)
     {
       NSLog(@"GWSystemCommandExecutor [FAIL] exception executing %@: %@", path, e);
-      [[NSNotificationCenter defaultCenter] removeObserver:observer];
+      if (outSource) dispatch_source_cancel(outSource);
+      if (errSource) dispatch_source_cancel(errSource);
       if (errorOutput) *errorOutput = [captured copy];
       return -1;
     }
 
-  [[NSNotificationCenter defaultCenter] removeObserver:observer];
-
-  // Flush any partial final line
-  if ([lineBuf length] > 0 && callback)
-    callback([lineBuf copy]);
+  // Flush partial final lines
+  if ([outBuf length] > 0 && stdoutCallback)
+    stdoutCallback([outBuf copy]);
+  if ([errBuf length] > 0 && stderrCallback)
+    stderrCallback([errBuf copy]);
 
   int status = [task terminationStatus];
   if (errorOutput)

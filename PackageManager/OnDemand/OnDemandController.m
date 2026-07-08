@@ -34,13 +34,99 @@ static const CGFloat kIconLeft = 24.0;            // METRICS_ICON_LEFT
 static const CGFloat kTextLeft = 104.0;           // METRICS_TEXT_LEFT = 24 + 64 + 16
 static const CGFloat kSpace8 = 8.0;               // METRICS_SPACE_8
 static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
-static const CGFloat kDetailsTextH = 140.0;        // expanded details height
+
+#pragma mark - ODLogWindowController
+
+@interface ODLogWindowController : NSWindowController
+{
+  NSScrollView *_scrollView;
+  NSTextView *_logView;
+}
+- (void)appendLog:(NSString *)text;
+- (void)clearLog;
+@end
+
+@implementation ODLogWindowController
+
+- (instancetype)init
+{
+  NSRect screenFrame = [[NSScreen mainScreen] frame];
+  CGFloat logHeight = screenFrame.size.height / 4.0;
+  NSRect logFrame = NSMakeRect(screenFrame.origin.x,
+                                screenFrame.origin.y,
+                                screenFrame.size.width,
+                                logHeight);
+  NSWindow *logWindow = [[NSWindow alloc]
+    initWithContentRect:logFrame
+              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                       | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable
+                backing:NSBackingStoreBuffered
+                  defer:YES];
+  [logWindow setTitle:@"Installer Log"];
+  [logWindow setMinSize:NSMakeSize(400, 100)];
+
+  self = [super initWithWindow:logWindow];
+  if (self)
+    {
+      NSView *contentView = [logWindow contentView];
+      NSRect frame = [contentView bounds];
+
+      _scrollView = [[NSScrollView alloc] initWithFrame:frame];
+      [_scrollView setHasVerticalScroller:YES];
+      [_scrollView setHasHorizontalScroller:NO];
+      [_scrollView setBorderType:NSNoBorder];
+      [_scrollView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+
+      NSSize contentSize = [_scrollView contentSize];
+      _logView = [[NSTextView alloc]
+        initWithFrame:NSMakeRect(0, 0, contentSize.width, contentSize.height)];
+      [_logView setMinSize:NSMakeSize(0.0, contentSize.height)];
+      [_logView setMaxSize:NSMakeSize(FLT_MAX, FLT_MAX)];
+      [_logView setVerticallyResizable:YES];
+      [_logView setHorizontallyResizable:NO];
+      [_logView setEditable:NO];
+      [_logView setSelectable:YES];
+      [_logView setFont:[NSFont userFixedPitchFontOfSize:10]];
+      [_logView setTextColor:[NSColor darkGrayColor]];
+      [_logView setBackgroundColor:[NSColor whiteColor]];
+      [[_logView textContainer] setContainerSize:NSMakeSize(contentSize.width, FLT_MAX)];
+      [[_logView textContainer] setWidthTracksTextView:YES];
+
+      [_scrollView setDocumentView:_logView];
+      [contentView addSubview:_scrollView];
+    }
+  return self;
+}
+
+- (void)appendLog:(NSString *)text
+{
+  if (!text || !_logView) return;
+  NSDictionary *attrs = @{
+    NSFontAttributeName: [NSFont userFixedPitchFontOfSize:10],
+    NSForegroundColorAttributeName: [NSColor darkGrayColor]
+  };
+  NSAttributedString *astr = [[NSAttributedString alloc] initWithString:text
+                                                             attributes:attrs];
+  [[_logView textStorage] appendAttributedString:astr];
+  [_logView scrollRangeToVisible:NSMakeRange([[_logView string] length], 0)];
+}
+
+- (void)clearLog
+{
+  if (!_logView) return;
+  [[_logView textStorage] replaceCharactersInRange:
+    NSMakeRange(0, [[_logView string] length]) withString:@""];
+}
+
+@end
 
 #pragma mark - OnDemandController
 
 @implementation OnDemandController
 {
   BOOL _isTerminating;
+  double _totalDownloadBytes;
+  double _downloadedBytes;
 }
 
 - (instancetype)init
@@ -216,8 +302,8 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
   dispatch_async(dispatch_get_main_queue(), ^{
     [_statusField setStringValue:message ?: @""];
 
-    // Switch to indeterminate during long apt-get phase (progress stays at 50%)
-    if (progress > 0.0f && progress < 1.0f && ![_progressBar isIndeterminate])
+    // Switch to indeterminate during long operations (no real progress info)
+    if (progress > 0.1f && progress < 1.0f && ![_progressBar isIndeterminate])
       {
         [_progressBar setIndeterminate:YES];
         [_progressBar startAnimation:nil];
@@ -251,6 +337,10 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
 {
   NSLog(@"OnDemand -> installClicked: user confirmed download");
 
+  // Reset progress tracking counters
+  _totalDownloadBytes = 0.0;
+  _downloadedBytes = 0.0;
+
   // Switch from confirmation to progress UI
   [_descriptionField setHidden:YES];
   [_installButton setHidden:YES];
@@ -278,20 +368,6 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
   [_statusField setSelectable:NO];
   [_statusField setAlignment:NSTextAlignmentLeft];
   [[_window contentView] addSubview:_statusField];
-
-  // ── Details disclosure toggle (left side, same row as Cancel) ──
-  _detailsVisible = NO;
-  _detailsScrollView = nil;
-  _detailsTextView = nil;
-
-  _detailsToggle = [[NSButton alloc] initWithFrame:NSMakeRect(kSideMargin, kBottomMargin, 130.0, kBtnHeight)];
-  [_detailsToggle setTitle:@"  ▶  Details"];
-  [_detailsToggle setTarget:self];
-  [_detailsToggle setAction:@selector(detailsToggled:)];
-  [_detailsToggle setBordered:NO];
-  [[_detailsToggle cell] setFont:[NSFont systemFontOfSize:11.0]];
-  [[_detailsToggle cell] setHighlightsBy:NSContentsCellMask];
-  [[_window contentView] addSubview:_detailsToggle];
 
   // Cancel button in lower-right (matching Download button position from confirmation state)
   [_cancelButton setFrameOrigin:NSMakePoint(
@@ -480,31 +556,21 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
   NSString *command = [_spec postCommand];
   NSArray *commandArgs = [_spec postCommandArguments];
 
+  // Close the progress window before launching the app
+  [_window orderOut:nil];
+
   if (command)
     {
       NSLog(@"OnDemand -> [Step 2/2] Executing command: %@", command);
-      [_statusField setStringValue:@"Launching..."];
-
       dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         int status = [self _executeCommand:command arguments:commandArgs];
-        dispatch_async(dispatch_get_main_queue(), ^{
-          if (status != 0)
-            {
-              NSLog(@"OnDemand [FAIL] [Step 2/2] Execution FAILED: %@ (status %d)", command, status);
-              [self _showError:[NSString stringWithFormat:
-                                @"%@ was downloaded but could not be launched.", _appName]];
-              [self _exitWithCommandStatus:status command:command];
-              return;
-            }
-          NSLog(@"OnDemand [OK] [Step 2/2] Execution succeeded (exit %d), exiting", status);
-          [self _exitWithCommandStatus:status command:command];
-        });
+        NSLog(@"OnDemand [OK] [Step 2/2] Execution finished (status %d), exiting", status);
+        exit(status >= 0 ? status : 1);
       });
     }
   else
     {
       NSLog(@"OnDemand -> performInstallAndLaunch: no postinstall command, done");
-      [_statusField setStringValue:@"Download complete"];
       exit(0);
     }
 }
@@ -531,7 +597,6 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
     dispatch_async(dispatch_get_main_queue(), ^{
       if (!success)
         {
-          [self _populateDetailsFromBackend];
           NSString *captured = [_pm capturedErrorOutput];
 
           // ── Auto-recover from interrupted dpkg state ──
@@ -558,12 +623,10 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
                   if (retrySuccess)
                     {
                       NSLog(@"OnDemand: dpkg recovery succeeded, continuing...");
-                      [self _populateDetailsFromBackend];
                       [self _launchAfterInstall];
                     }
                   else
                     {
-                      [self _populateDetailsFromBackend];
                       NSString *retryCaptured = [_pm capturedErrorOutput];
                       if ([retryCaptured hasPrefix:@"E: "])
                         retryCaptured = [retryCaptured substringFromIndex:3];
@@ -589,35 +652,9 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
         }
 
       NSLog(@"OnDemand [OK] [Step 1/2] Download succeeded");
-      [self _populateDetailsFromBackend];
       [self _launchAfterInstall];
     });
   });
-}
-
-#pragma mark - Captured Output (Details)
-
-/// Populate the details text view from the backend's capturedErrorOutput
-/// if it hasn't already been populated via live installDidOutputLine: calls.
-- (void)_populateDetailsFromBackend
-{
-  if (!_detailsTextView || !_pm) return;
-
-  // Only append if the text view is still empty; live callbacks may have
-  // already populated it during command execution.
-  if ([[_detailsTextView string] length] > 0) return;
-
-  NSString *output = [_pm capturedErrorOutput];
-  if ([output length] == 0) return;
-
-  NSAttributedString *as = [[NSAttributedString alloc]
-                             initWithString:output
-                                 attributes:@{ NSFontAttributeName:
-                                   [NSFont userFixedPitchFontOfSize:10.0] }];
-  [[_detailsTextView textStorage] appendAttributedString:as];
-
-  NSRange endRange = NSMakeRange([output length], 0);
-  [_detailsTextView scrollRangeToVisible:endRange];
 }
 
 #pragma mark - Error Display
@@ -658,124 +695,101 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
   [NSApp terminate:nil];
 }
 
-#pragma mark - Details Disclosure
-
-- (void)detailsToggled:(id)sender
-{
-  _detailsVisible = !_detailsVisible;
-  NSString *arrow = _detailsVisible ? @"  ▼" : @"  ▶";
-  [_detailsToggle setTitle:[NSString stringWithFormat:@"%@  Details", arrow]];
-
-  if (_detailsVisible && !_detailsTextView)
-    {
-      // Create views but do NOT add to window hierarchy yet.
-      // They are added in _resizeForDetails AFTER the window resize
-      // so the resize pass never touches them.
-      CGFloat contentW = kWinWidth - 2 * kSideMargin;
-
-      _detailsTextView = [[NSTextView alloc]
-                           initWithFrame:NSMakeRect(0, 0, contentW, kDetailsTextH)];
-      [_detailsTextView setEditable:NO];
-      [_detailsTextView setSelectable:YES];
-      [_detailsTextView setFont:[NSFont userFixedPitchFontOfSize:10.0]];
-      [_detailsTextView setTextColor:[NSColor colorWithCalibratedWhite:0.22 alpha:1.0]];
-      [_detailsTextView setBackgroundColor:[NSColor colorWithCalibratedWhite:0.95 alpha:1.0]];
-      [_detailsTextView setAutoresizingMask:NSViewWidthSizable];
-
-      _detailsScrollView = [[NSScrollView alloc]
-                             initWithFrame:NSMakeRect(kSideMargin, 0,
-                                                      contentW, kDetailsTextH)];
-      [_detailsScrollView setDocumentView:_detailsTextView];
-      [_detailsScrollView setHasVerticalScroller:YES];
-      [_detailsScrollView setBorderType:NSBezelBorder];
-    }
-
-  [self performSelector:@selector(_resizeForDetails) withObject:nil afterDelay:0];
-}
-
-- (void)_resizeForDetails
-{
-  CGFloat contentW = kWinWidth - 2 * kSideMargin;
-  CGFloat growBy = kDetailsTextH;
-
-  if (_detailsVisible)
-    {
-      // Grow the window — no display yet so all changes land in one frame
-      NSRect frame = [_window frame];
-      frame.origin.y -= growBy;
-      frame.size.height += growBy;
-      [_window setFrame:frame display:NO];
-
-      // Shift existing controls up so their screen position stays put
-      for (NSView *v in [[_window contentView] subviews])
-        {
-          NSRect f = [v frame];
-          f.origin.y += growBy;
-          [v setFrame:f];
-        }
-
-      // NOW add the scroll view to the hierarchy — the resize is done,
-      // so the scroll view is never touched by any resize pass.
-      // If it was already added (second+ toggle), just reposition it.
-      if ([_detailsScrollView superview] == nil)
-        [[_window contentView] addSubview:_detailsScrollView];
-      [_detailsScrollView setFrame:NSMakeRect(kSideMargin, 0,
-                                               contentW, kDetailsTextH)];
-      [_detailsScrollView setHidden:NO];
-
-      // Single display pass that shows everything in its final position
-      [_window display];
-
-      NSRange end = NSMakeRange([[_detailsTextView string] length], 0);
-      [_detailsTextView scrollRangeToVisible:end];
-      [self _populateDetailsFromBackend];
-    }
-  else
-    {
-      // Hide the scroll view first, then resize (it's still in the hierarchy
-      // but hidden so resize passes won't touch it)
-      [_detailsScrollView setHidden:YES];
-
-      // Shrink the window — no display yet so all changes land in one frame
-      NSRect frame = [_window frame];
-      frame.origin.y += growBy;
-      frame.size.height -= growBy;
-      [_window setFrame:frame display:NO];
-
-      // Shift controls back down
-      for (NSView *v in [[_window contentView] subviews])
-        {
-          if (v == _detailsScrollView) continue;
-          NSRect f = [v frame];
-          f.origin.y -= growBy;
-          [v setFrame:f];
-        }
-
-      [_window display];
-    }
-}
-
 #pragma mark - Live Output from Backend
 
 - (void)installDidOutputLine:(NSString *)line
 {
   if (!line) return;
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (!_detailsTextView) return;
+    if (_logController)
+      [_logController appendLog:[line stringByAppendingString:@"\n"]];
 
-    NSAttributedString *as = [[NSAttributedString alloc]
-                               initWithString:[line stringByAppendingString:@"\n"]
-                                   attributes:@{ NSFontAttributeName:
-                                     [NSFont userFixedPitchFontOfSize:10.0] }];
-    [[_detailsTextView textStorage] appendAttributedString:as];
-
-    // Auto-scroll if the details section is visible
-    if (_detailsVisible)
+    // ── Parse "Need to get X MB/kB of archives" for total download size ──
+    if (_totalDownloadBytes == 0.0)
       {
-        NSRange endRange = NSMakeRange([[_detailsTextView string] length], 0);
-        [_detailsTextView scrollRangeToVisible:endRange];
+        NSRange r = [line rangeOfString:@"Need to get "];
+        if (r.location != NSNotFound)
+          {
+            NSString *rest = [line substringFromIndex:r.location + r.length];
+            NSScanner *scanner = [NSScanner scannerWithString:rest];
+            double val;
+            if ([scanner scanDouble:&val])
+              {
+                if ([rest rangeOfString:@"MB"].location != NSNotFound)
+                  _totalDownloadBytes = val * 1024.0 * 1024.0;
+                else if ([rest rangeOfString:@"kB"].location != NSNotFound)
+                  _totalDownloadBytes = val * 1024.0;
+                else if ([rest rangeOfString:@"B"].location != NSNotFound)
+                  _totalDownloadBytes = val;
+              }
+          }
       }
+
+    // ── Parse "Get:N ... [X MB/kB]" to track downloaded bytes ──
+    if (_totalDownloadBytes > 0.0)
+      {
+        NSRange r = [line rangeOfString:@"["];
+        if (r.location != NSNotFound)
+          {
+            NSString *rest = [line substringFromIndex:r.location + 1];
+            NSRange end = [rest rangeOfString:@"]"];
+            if (end.location != NSNotFound)
+              {
+                NSString *sizeStr = [rest substringToIndex:end.location];
+                NSScanner *scanner = [NSScanner scannerWithString:sizeStr];
+                double val;
+                if ([scanner scanDouble:&val])
+                  {
+                    double bytes = 0.0;
+                    if ([sizeStr rangeOfString:@"MB"].location != NSNotFound)
+                      bytes = val * 1024.0 * 1024.0;
+                    else if ([sizeStr rangeOfString:@"kB"].location != NSNotFound)
+                      bytes = val * 1024.0;
+                    else if ([sizeStr rangeOfString:@"B"].location != NSNotFound)
+                      bytes = val;
+
+                    if (bytes > 0.0)
+                      {
+                        _downloadedBytes += bytes;
+                        CGFloat p = MIN(_downloadedBytes / _totalDownloadBytes, 1.0);
+                        [_progressBar setIndeterminate:NO];
+                        [_progressBar setDoubleValue:0.05 + p * 0.7];
+                        [_progressBar displayIfNeeded];
+                      }
+                  }
+              }
+          }
+      }
+
+    // ── Parse dpkg progress (e.g. "(Reading database ... 45%)") for install phase ──
+    {
+      NSRange r = [line rangeOfString:@"%"];
+      if (r.location != NSNotFound && r.location > 0)
+        {
+          NSUInteger start = r.location;
+          while (start > 0 && isdigit([line characterAtIndex:start - 1]))
+            start--;
+          if (start < r.location)
+            {
+              CGFloat pct = [[line substringWithRange:NSMakeRange(start, r.location - start)] floatValue] / 100.0;
+              if (pct >= 0.0 && pct <= 1.0)
+                {
+                  [_progressBar setIndeterminate:NO];
+                  [_progressBar setDoubleValue:0.75 + pct * 0.25];
+                  [_progressBar displayIfNeeded];
+                }
+            }
+        }
+    }
   });
+}
+
+#pragma mark - Installer Log
+
+- (void)showLog:(id)sender
+{
+  if (!_logController) return;
+  [[_logController window] makeKeyAndOrderFront:nil];
 }
 
 #pragma mark - NSApplicationDelegate
@@ -783,6 +797,69 @@ static const CGFloat kDetailsTextH = 140.0;        // expanded details height
 - (void)applicationDidFinishLaunching:(NSNotification *)note
 {
   NSLog(@"OnDemand -> applicationDidFinishLaunching: showing download dialog");
+
+  // Create log window controller
+  _logController = [[ODLogWindowController alloc] init];
+
+  // ── Set up main menu ──
+  NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@""];
+
+  /* Application Menu */
+  NSString *appName = [[NSProcessInfo processInfo] processName];
+  NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:appName
+                                                       action:nil
+                                                keyEquivalent:@""];
+  [mainMenu addItem:appMenuItem];
+  NSMenu *appMenu = [[NSMenu alloc] initWithTitle:appName];
+  [appMenu addItemWithTitle:@"About"
+                     action:@selector(orderFrontStandardAboutPanel:)
+              keyEquivalent:@""];
+  [appMenu addItem:[NSMenuItem separatorItem]];
+  [appMenu addItemWithTitle:@"Quit"
+                     action:@selector(terminate:)
+              keyEquivalent:@"q"];
+  [appMenuItem setSubmenu:appMenu];
+
+  /* Edit Menu */
+  NSMenuItem *editMenuItem = [[NSMenuItem alloc] initWithTitle:@"Edit"
+                                                        action:nil
+                                                 keyEquivalent:@""];
+  [mainMenu addItem:editMenuItem];
+  NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
+  [editMenu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
+  [editMenu addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"];
+  [editMenu addItem:[NSMenuItem separatorItem]];
+  [editMenu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+  [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+  [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+  [editMenu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
+  [editMenuItem setSubmenu:editMenu];
+
+  /* Window Menu */
+  NSMenuItem *windowMenuItem = [[NSMenuItem alloc] initWithTitle:@"Window"
+                                                          action:nil
+                                                   keyEquivalent:@""];
+  [mainMenu addItem:windowMenuItem];
+  NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
+  [windowMenu addItemWithTitle:@"Minimize"
+                        action:@selector(performMiniaturize:)
+                 keyEquivalent:@"m"];
+  [windowMenu addItemWithTitle:@"Zoom"
+                        action:@selector(performZoom:)
+                 keyEquivalent:@""];
+  [windowMenu addItem:[NSMenuItem separatorItem]];
+  [windowMenu addItemWithTitle:@"Installer Log"
+                        action:@selector(showLog:)
+                 keyEquivalent:@"l"];
+  [windowMenu addItem:[NSMenuItem separatorItem]];
+  [windowMenu addItemWithTitle:@"Bring All to Front"
+                        action:@selector(arrangeInFront:)
+                 keyEquivalent:@""];
+  [windowMenuItem setSubmenu:windowMenu];
+  [NSApp setWindowsMenu:windowMenu];
+
+  [NSApp setMainMenu:mainMenu];
+
   [self showWindow];
 }
 

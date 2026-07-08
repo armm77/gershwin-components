@@ -33,6 +33,15 @@
  stderrCallback:(nullable void (^)(NSString *line))callback
  capturedErrorOutput:(NSString *__autoreleasing *)errorOutput;
 
+// Execute a command with live per-line callbacks for both stdout and stderr,
+// plus full stderr capture.  stdoutCallback/stderrCallback are invoked for
+// each complete line as the command runs.
+- (int)execute:(NSString *)path
+     arguments:(NSArray<NSString *> *)args
+ stdoutCallback:(nullable void (^)(NSString *line))stdoutCallback
+ stderrCallback:(nullable void (^)(NSString *line))stderrCallback
+ capturedErrorOutput:(NSString *__autoreleasing *)errorOutput;
+
 @end
 
 #pragma mark - Real Implementation (uses NSTask)
