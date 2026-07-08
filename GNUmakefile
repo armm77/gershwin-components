@@ -3,47 +3,40 @@
 # common targets to all first-level subdirectories that contain a Makefile.
 # Use this from the top of the gershwin-components tree.
 
-.PHONY: all build clean install distclean help $(SUBDIRS)
-
 # Auto-detect first-level subdirectories that contain a Makefile, Makefile.in, or a configure script
 SUBDIRS := $(sort $(shell for d in *; do \
-	[ -d "$${d}" ] && \
+	[ -d "$${d}" ] && [ "$$(readlink "$${d}")" != "." ] && \
+	! [ -f "$${d}/.DISABLED" ] && \
 	( [ -f "$${d}/GNUmakefile" ] || [ -f "$${d}/Makefile" ] || [ -f "$${d}/Makefile.in" ] || [ -x "$${d}/configure" ] || [ -f "$${d}/configure" ] ) && echo "$${d}"; \
 	done))
+
+.PHONY: all build clean install distclean help $(SUBDIRS)
+
 all: build
 
 # Build each subdirectory
 build: $(SUBDIRS)
 	@echo "Build completed for all components."
 
-# For each subdir, if a Makefile.in exists and there is no Makefile (or it's older),
-# prefer to run configure (use `confiture` if available, else ./configure, else autoreconf)
+run_configure = echo "Preparing $(1) (running configure)"; ( cd $(1) && if command -v confiture >/dev/null 2>&1; then confiture || true; elif [ -x ./configure ]; then ./configure || true; elif [ -f configure ]; then sh configure || true; elif command -v autoreconf >/dev/null 2>&1; then autoreconf -i && ./configure || true; else echo "No configure tool found in $(1); skipping configure"; fi )
+
+# For each subdir, if a Makefile.in or GNUmakefile.in exists and the generated
+# Makefile/GNUmakefile is missing or older, run configure.
 $(SUBDIRS):
 	@echo "Entering $@";
-	@if [ -f "$@/Makefile.in" ] && ( [ ! -f "$@/Makefile" ] || [ "$@/Makefile.in" -nt "$@/Makefile" ] ); then \
-		echo "Preparing $@ (running configure)"; \
-		( cd $@ && \
-			if command -v confiture >/dev/null 2>&1; then \
-				confiture || true; \
-			elif [ -x configure ]; then \
-				./configure || true; \
-			elif [ -f configure ]; then \
-				sh configure || true; \
-			elif command -v autoreconf >/dev/null 2>&1; then \
-				autoreconf -i && ./configure || true; \
-			else \
-				echo "No configure tool found in $@; skipping configure"; \
-			fi ); \
+	@if ( [ -f "$@/Makefile.in" ] && ( [ ! -f "$@/Makefile" ] || [ "$@/Makefile.in" -nt "$@/Makefile" ] ) ) || \
+	   ( [ -f "$@/GNUmakefile.in" ] && ( [ ! -f "$@/GNUmakefile" ] || [ "$@/GNUmakefile.in" -nt "$@/GNUmakefile" ] ) ); then \
+		$(call run_configure,$@); \
 	fi; \
-	$(MAKE) -C $@ || true; \
-	@echo "Leaving $@"; 
+	$(MAKE) -C $@ || true;
+	@echo "Leaving $@"
 
 # Clean every subdir (non-fatal)
 clean:
 	@for d in $(SUBDIRS); do \
-		if [ -f "$${d}/Makefile.in" ] && ( [ ! -f "$${d}/Makefile" ] || [ "$${d}/Makefile.in" -nt "$${d}/Makefile" ] ); then \
-			echo "Preparing $$d (running configure)"; \
-			( cd $$d && if command -v confiture >/dev/null 2>&1; then confiture || true; elif [ -x configure ]; then ./configure || true; elif [ -f configure ]; then sh configure || true; elif command -v autoreconf >/dev/null 2>&1; then autoreconf -i && ./configure || true; else echo "No configure tool found in $$d; skipping configure"; fi ); \
+		if ( [ -f "$${d}/Makefile.in" ] && ( [ ! -f "$${d}/Makefile" ] || [ "$${d}/Makefile.in" -nt "$${d}/Makefile" ] ) ) || \
+		   ( [ -f "$${d}/GNUmakefile.in" ] && ( [ ! -f "$${d}/GNUmakefile" ] || [ "$${d}/GNUmakefile.in" -nt "$${d}/GNUmakefile" ] ) ); then \
+			$(call run_configure,$$$$d); \
 		fi; \
 		if [ -f "$${d}/Makefile" -o -f "$${d}/GNUmakefile" ]; then \
 			echo "Cleaning $$d"; $(MAKE) -C $$d clean || true; \
@@ -53,9 +46,9 @@ clean:
 # Distclean: deeper clean if subdirs provide it
 distclean:
 	@for d in $(SUBDIRS); do \
-		if [ -f "$${d}/Makefile.in" ] && ( [ ! -f "$${d}/Makefile" ] || [ "$${d}/Makefile.in" -nt "$${d}/Makefile" ] ); then \
-			echo "Preparing $$d (running configure)"; \
-			( cd $$d && if command -v confiture >/dev/null 2>&1; then confiture || true; elif [ -x configure ]; then ./configure || true; elif [ -f configure ]; then sh configure || true; elif command -v autoreconf >/dev/null 2>&1; then autoreconf -i && ./configure || true; else echo "No configure tool found in $$d; skipping configure"; fi ); \
+		if ( [ -f "$${d}/Makefile.in" ] && ( [ ! -f "$${d}/Makefile" ] || [ "$${d}/Makefile.in" -nt "$${d}/Makefile" ] ) ) || \
+		   ( [ -f "$${d}/GNUmakefile.in" ] && ( [ ! -f "$${d}/GNUmakefile" ] || [ "$${d}/GNUmakefile.in" -nt "$${d}/GNUmakefile" ] ) ); then \
+			$(call run_configure,$$$$d); \
 		fi; \
 		if [ -f "$${d}/Makefile" -o -f "$${d}/GNUmakefile" ]; then \
 			echo "Distclean $$d"; $(MAKE) -C $$d distclean || true; \
@@ -64,9 +57,9 @@ distclean:
 
 install:
 	@for d in $(SUBDIRS); do \
-		if [ -f "$${d}/Makefile.in" ] && ( [ ! -f "$${d}/Makefile" ] || [ "$${d}/Makefile.in" -nt "$${d}/Makefile" ] ); then \
-			echo "Preparing $$d (running configure)"; \
-			( cd $$d && if command -v confiture >/dev/null 2>&1; then confiture || true; elif [ -x configure ]; then ./configure || true; elif [ -f configure ]; then sh configure || true; elif command -v autoreconf >/dev/null 2>&1; then autoreconf -i && ./configure || true; else echo "No configure tool found in $$d; skipping configure"; fi ); \
+		if ( [ -f "$${d}/Makefile.in" ] && ( [ ! -f "$${d}/Makefile" ] || [ "$${d}/Makefile.in" -nt "$${d}/Makefile" ] ) ) || \
+		   ( [ -f "$${d}/GNUmakefile.in" ] && ( [ ! -f "$${d}/GNUmakefile" ] || [ "$${d}/GNUmakefile.in" -nt "$${d}/GNUmakefile" ] ) ); then \
+			$(call run_configure,$$$$d); \
 		fi; \
 		if [ -f "$${d}/Makefile" -o -f "$${d}/GNUmakefile" ]; then \
 			echo "Installing $$d"; $(MAKE) -C $$d install || true; \
@@ -74,7 +67,7 @@ install:
 	done
 
 help:
-	@echo "Top-level GNUmakefile for gershwin-components";
-	@echo "Available subdirectories:"; \
-	@printf '  %s\n' $(SUBDIRS);
-	@echo "Targets: all (default), build, clean, distclean, install, help"
+	@echo "Top-level GNUmakefile for gershwin-components"; \
+	echo "Available subdirectories:"; \
+	printf '  %s\n' $(SUBDIRS); \
+	echo "Targets: all (default), build, clean, distclean, install, help"
