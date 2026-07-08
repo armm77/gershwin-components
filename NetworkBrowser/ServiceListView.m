@@ -61,7 +61,7 @@
   detailsView = view;
 }
 
-- (void)setSelectionDelegate:(id)delegate
+- (void)setSelectionDelegate:(id<ServiceListViewDelegate>)delegate
 {
   selectionDelegate = delegate;
 }

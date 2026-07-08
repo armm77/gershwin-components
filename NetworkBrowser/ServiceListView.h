@@ -13,6 +13,11 @@
 #import <Foundation/NSArray.h>
 
 @class ServiceDetailsView;
+@class ServiceListView;
+
+@protocol ServiceListViewDelegate <NSObject>
+- (void)serviceListViewSelectionDidChange:(ServiceListView *)sender;
+@end
 
 @interface ServiceListView : NSView <NSTableViewDataSource, NSTableViewDelegate>
 {
@@ -20,12 +25,12 @@
   NSScrollView *scrollView;
   NSMutableArray *services;
   ServiceDetailsView *detailsView;
-  id selectionDelegate;
+  id<ServiceListViewDelegate> selectionDelegate;
 }
 
 - (id)initWithFrame:(NSRect)frame;
 - (void)setDetailsView:(ServiceDetailsView *)view;
-- (void)setSelectionDelegate:(id)delegate;
+- (void)setSelectionDelegate:(id<ServiceListViewDelegate>)delegate;
 - (void)addService:(NSNetService *)service;
 - (void)removeService:(NSNetService *)service;
 - (void)clearServices;
