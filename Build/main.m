@@ -13,13 +13,20 @@ int main(int argc, const char *argv[])
 {
     @autoreleasepool {
         // Process command line arguments
+        // Use -makefilePath flag so NSApp doesn't treat it as a file to open
         NSArray *args = [[NSProcessInfo processInfo] arguments];
         NSString *makefilePath = nil;
         NSMutableArray *extraArgs = [NSMutableArray array];
-        if ([args count] > 1) {
-            makefilePath = [args objectAtIndex: 1];
-            for (NSUInteger i = 2; i < [args count]; i++) {
-                [extraArgs addObject: [args objectAtIndex: i]];
+        BOOL nextIsMakefile = NO;
+        for (NSUInteger i = 1; i < [args count]; i++) {
+            NSString *arg = [args objectAtIndex: i];
+            if ([arg isEqualToString: @"-makefilePath"]) {
+                nextIsMakefile = YES;
+            } else if (nextIsMakefile) {
+                makefilePath = arg;
+                nextIsMakefile = NO;
+            } else {
+                [extraArgs addObject: arg];
             }
         }
 
@@ -32,7 +39,11 @@ int main(int argc, const char *argv[])
                 NSString *dir = [makefilePath stringByDeletingLastPathComponent];
                 if ([dir length] == 0) dir = @".";
                 [task setCurrentDirectoryPath: dir];
-                NSString *gmakePath = @"/usr/bin/gmake";
+                NSString *gmakePath = [NSTask launchPathForTool: @"gmake"];
+                if (!gmakePath) {
+                    fprintf(stderr, "Error: gmake not found in PATH\n");
+                    exit(1);
+                }
                 [task setLaunchPath: gmakePath];
                 NSMutableArray *taskArgs = [NSMutableArray arrayWithObjects: @"-f", makefilePath, nil];
                 [taskArgs addObjectsFromArray: extraArgs];
@@ -43,7 +54,6 @@ int main(int argc, const char *argv[])
                 [task setStandardError: pipe];
                 NSFileHandle *handle = [pipe fileHandleForReading];
                 [task launch];
-                // Read and output
                 while (1) {
                     NSData *data = [handle availableData];
                     if (data.length == 0) {
@@ -58,6 +68,10 @@ int main(int argc, const char *argv[])
                     }
                 }
                 exit([task terminationStatus]);
+            } else {
+                fprintf(stderr, "Usage: %s -makefilePath <GNUmakefile> [extra gmake args...]\n",
+                        [[args objectAtIndex: 0] UTF8String]);
+                exit(1);
             }
         } else {
             // GUI mode

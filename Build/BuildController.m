@@ -82,26 +82,6 @@
     }
 }
 
-- (void)showFileOpenDialog
-{
-    NSOpenPanel *openPanel = [NSOpenPanel openPanel];
-    [openPanel setTitle: @"Select GNUmakefile"];
-    [openPanel setCanChooseFiles: YES];
-    [openPanel setCanChooseDirectories: NO];
-    [openPanel setAllowsMultipleSelection: NO];
-
-    [openPanel beginSheetModalForWindow: window
-                      completionHandler: ^(NSInteger result) {
-        if (result == NSModalResponseOK) {
-            NSArray *urls = [openPanel URLs];
-            if ([urls count] > 0) {
-                self.makefilePath = [[urls objectAtIndex: 0] path];
-                [self startBuild];
-            }
-        }
-    }];
-}
-
 - (void)startBuild
 {
     // Clear previous output
@@ -177,6 +157,45 @@
     }
 }
 
+- (void)showFileOpenDialog
+{
+    NSOpenPanel *openPanel = [NSOpenPanel openPanel];
+    [openPanel setTitle: @"Select GNUmakefile"];
+    [openPanel setCanChooseFiles: YES];
+    [openPanel setCanChooseDirectories: YES];
+    [openPanel setAllowsMultipleSelection: NO];
+
+    NSString *defaultDir = @"/Developer/Library/Sources";
+    if ([[NSFileManager defaultManager] fileExistsAtPath: defaultDir]) {
+        [openPanel setDirectoryURL: [NSURL fileURLWithPath: defaultDir]];
+    }
+
+    [openPanel beginSheetModalForWindow: window
+                      completionHandler: ^(NSInteger result) {
+        if (result == NSModalResponseOK) {
+            NSArray *urls = [openPanel URLs];
+            if ([urls count] > 0) {
+                NSString *path = [[urls objectAtIndex: 0] path];
+                BOOL isDir = NO;
+                [[NSFileManager defaultManager] fileExistsAtPath: path isDirectory: &isDir];
+                if (isDir) {
+                    for (NSString *name in @[@"GNUmakefile", @"GNUmakefile.in"]) {
+                        NSString *mf = [path stringByAppendingPathComponent: name];
+                        if ([[NSFileManager defaultManager] fileExistsAtPath: mf]) {
+                            self.makefilePath = mf;
+                            [self startBuild];
+                            return;
+                        }
+                    }
+                } else {
+                    self.makefilePath = path;
+                    [self startBuild];
+                }
+            }
+        }
+    }];
+}
+
 - (void)outputAvailable:(NSNotification *)notification
 {
     NSData *data = [[notification userInfo] objectForKey: NSFileHandleNotificationDataItem];
@@ -213,27 +232,7 @@
 - (void)buildFinished:(NSTask *)task
 {
     int status = [task terminationStatus];
-    if (status == 0) {
-        if (statusLabel) [statusLabel setStringValue: @"Build completed successfully"];
-        if (progressBar) [progressBar setDoubleValue: 100.0];
-        if (self.consoleMode) {
-            exit(0);
-        } else {
-            [NSApp terminate: self];
-        }
-    } else {
-        if (statusLabel) [statusLabel setStringValue: @"Build failed"];
-        if (progressBar) [progressBar setDoubleValue: 0.0];
-        NSString *errorMessage = [self formatErrorOutput: self.buildOutput];
-        NSDebugLLog(@"gwcomp", @"Build failed with the following output:\n%@", errorMessage);
-        if (self.consoleMode) {
-            exit(status);
-        } else {
-            [NSApp terminate: self];
-        }
-    }
 
-    // Clean up
     [[NSNotificationCenter defaultCenter] removeObserver: self
                                                     name: NSTaskDidTerminateNotification
                                                   object: task];
@@ -242,7 +241,216 @@
                                                   object: nil];
     buildTask = nil;
     outputPipe = nil;
+
+    if (self.consoleMode) {
+        if (status == 0) {
+            exit(0);
+        } else {
+            exit(status);
+        }
+    }
+
+    if (statusLabel) {
+        [statusLabel setStringValue: (status == 0) ? @"Build completed successfully" : @"Build failed"];
+    }
+    if (progressBar) {
+        [progressBar setDoubleValue: (status == 0) ? 100.0 : 0.0];
+    }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText: (status == 0) ? @"Build Succeeded" : @"Build Failed"];
+    [alert setInformativeText: (status == 0)
+        ? @"The build completed successfully."
+        : [self formatErrorOutput: self.buildOutput]];
+
+    if (status == 0) {
+        [alert addButtonWithTitle: @"Install and Launch"];
+        [alert addButtonWithTitle: @"Install"];
+    }
+    [alert addButtonWithTitle: @"OK"];
+
+    NSInteger button = [alert runModal];
+
+    if (status == 0 && button != NSAlertThirdButtonReturn) {
+        [self startInstallWithLaunch: (button == NSAlertFirstButtonReturn)];
+        return;
+    }
+
     [self.buildOutput setString: @""];
+    [NSApp terminate: self];
+}
+
+- (void)startInstallWithLaunch:(BOOL)shouldLaunch
+{
+    if (!makefilePath) return;
+
+    installShouldLaunch = shouldLaunch;
+
+    if (statusLabel) [statusLabel setStringValue: @"Installing..."];
+    if (progressBar) {
+        [progressBar setIndeterminate: YES];
+        [progressBar startAnimation: self];
+    }
+    [self.buildOutput setString: @""];
+    if (outputView) [outputView setString: @""];
+
+    NSString *directory = [makefilePath stringByDeletingLastPathComponent];
+    if ([directory length] == 0) directory = @".";
+
+    NSString *gmakePath = [NSTask launchPathForTool: @"gmake"];
+    if (!gmakePath) {
+        if (statusLabel) [statusLabel setStringValue: @"Error: gmake not found in PATH"];
+        return;
+    }
+
+    installTask = [[NSTask alloc] init];
+    [installTask setCurrentDirectoryPath: directory];
+    [installTask setLaunchPath: @"/usr/bin/sudo"];
+    [installTask setArguments: @[@"-E", gmakePath, @"-f", makefilePath, @"install"]];
+    [installTask setEnvironment: [[NSProcessInfo processInfo] environment]];
+
+    installPipe = [[NSPipe alloc] init];
+    [installTask setStandardOutput: installPipe];
+    [installTask setStandardError: installPipe];
+
+    [[NSNotificationCenter defaultCenter] addObserver: self
+                                             selector: @selector(installDidTerminate:)
+                                                 name: NSTaskDidTerminateNotification
+                                               object: installTask];
+
+    NSFileHandle *handle = [installPipe fileHandleForReading];
+    [[NSNotificationCenter defaultCenter] addObserver: self
+                                             selector: @selector(installOutputAvailable:)
+                                                 name: NSFileHandleReadCompletionNotification
+                                               object: handle];
+    [handle readInBackgroundAndNotify];
+
+    @try {
+        [installTask launch];
+    } @catch (NSException *exception) {
+        if (statusLabel) [statusLabel setStringValue: [NSString stringWithFormat: @"Install failed: %@", [exception reason]]];
+        installTask = nil;
+        installPipe = nil;
+    }
+}
+
+- (void)installOutputAvailable:(NSNotification *)notification
+{
+    NSData *data = [[notification userInfo] objectForKey: NSFileHandleNotificationDataItem];
+    if ([data length] > 0) {
+        NSString *output = [[NSString alloc] initWithData: data encoding: NSUTF8StringEncoding];
+        [self.buildOutput appendString: output];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (outputView) {
+                [outputView setString: self.buildOutput];
+                [outputView scrollRangeToVisible: NSMakeRange([[outputView string] length], 0)];
+            }
+        });
+
+        [[notification object] readInBackgroundAndNotify];
+    }
+}
+
+- (void)installDidTerminate:(NSNotification *)notification
+{
+    NSTask *task = [notification object];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self installFinished: task];
+    });
+}
+
+- (void)installFinished:(NSTask *)task
+{
+    int status = [task terminationStatus];
+
+    [[NSNotificationCenter defaultCenter] removeObserver: self
+                                                    name: NSTaskDidTerminateNotification
+                                                  object: task];
+    [[NSNotificationCenter defaultCenter] removeObserver: self
+                                                    name: NSFileHandleReadCompletionNotification
+                                                  object: nil];
+    installTask = nil;
+    installPipe = nil;
+
+    if (progressBar) {
+        [progressBar stopAnimation: self];
+        [progressBar setIndeterminate: NO];
+    }
+
+    if (status == 0) {
+        if (statusLabel) [statusLabel setStringValue: @"Install completed"];
+
+        if (installShouldLaunch) {
+            NSString *appName = [self appNameFromMakefile];
+            if (appName) {
+                [[NSWorkspace sharedWorkspace] findApplications];
+                NSString *appPath = [[NSWorkspace sharedWorkspace] fullPathForApplication: appName];
+                if (appPath) {
+                    [[NSWorkspace sharedWorkspace] launchApplication: appPath];
+                    [self performSelector: @selector(terminateAfterDelay)
+                               withObject: nil
+                               afterDelay: 2.0];
+                    return;
+                }
+                if (statusLabel) [statusLabel setStringValue: @"Launch failed - app not found"];
+                NSAlert *alert = [[NSAlert alloc] init];
+                [alert setMessageText: @"Launch Failed"];
+                [alert setInformativeText: [NSString stringWithFormat:
+                    @"Could not find installed \"%@\" application.", appName]];
+                [alert addButtonWithTitle: @"OK"];
+                [alert runModal];
+            }
+        } else {
+            NSString *title = @"Install Succeeded";
+            NSString *msg = @"The application was installed successfully.";
+            NSAlert *alert = [[NSAlert alloc] init];
+            [alert setMessageText: title];
+            [alert setInformativeText: msg];
+            [alert addButtonWithTitle: @"OK"];
+            [alert runModal];
+        }
+    } else {
+        if (statusLabel) [statusLabel setStringValue: @"Install failed"];
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText: @"Install Failed"];
+        [alert setInformativeText: [self formatErrorOutput: self.buildOutput]];
+        [alert addButtonWithTitle: @"OK"];
+        [alert runModal];
+    }
+
+    [self terminateAfterDelay];
+}
+
+- (void)terminateAfterDelay
+{
+    [self.buildOutput setString: @""];
+    [NSApp terminate: self];
+}
+
+- (NSString *)appNameFromMakefile
+{
+    NSString *content = [NSString stringWithContentsOfFile: makefilePath
+                                                  encoding: NSUTF8StringEncoding
+                                                     error: NULL];
+    if (!content) return nil;
+
+    NSArray *lines = [content componentsSeparatedByString: @"\n"];
+    for (NSString *line in lines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        if ([trimmed hasPrefix: @"APP_NAME"]) {
+            NSScanner *scanner = [NSScanner scannerWithString: trimmed];
+            [scanner scanUpToString: @"=" intoString: NULL];
+            [scanner scanString: @"=" intoString: NULL];
+            NSString *name = nil;
+            [scanner scanUpToString: @"\n" intoString: &name];
+            name = [name stringByTrimmingCharactersInSet:
+                [NSCharacterSet whitespaceCharacterSet]];
+            if ([name length] > 0) return name;
+        }
+    }
+    return nil;
 }
 
 - (NSString *)formatErrorOutput:(NSString *)output
@@ -286,9 +494,11 @@
 
 - (void)windowWillClose:(NSNotification *)notification
 {
-    // Terminate any running build task
     if (buildTask && [buildTask isRunning]) {
         [buildTask terminate];
+    }
+    if (installTask && [installTask isRunning]) {
+        [installTask terminate];
     }
 
     [[NSNotificationCenter defaultCenter] removeObserver: self];

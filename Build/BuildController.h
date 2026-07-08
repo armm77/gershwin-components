@@ -16,6 +16,9 @@
     NSTask *buildTask;
     NSPipe *outputPipe;
     NSString *makefilePath;
+    NSTask *installTask;
+    NSPipe *installPipe;
+    BOOL installShouldLaunch;
 }
 
 @property (strong) NSString *makefilePath;

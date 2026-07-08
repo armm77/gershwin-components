@@ -10,10 +10,15 @@
 @implementation BuildApplication
 
 @synthesize makefilePath;
+@synthesize extraArgs;
+
+- (BOOL)applicationShouldOpenUntitledFile:(NSApplication *)sender
+{
+    return NO;
+}
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
-    NSDebugLLog(@"gwcomp", @"applicationDidFinishLaunching called");
     BuildController *controller = [[BuildController alloc] init];
     [controller setMakefilePath: self.makefilePath];
     [controller setExtraArgs: self.extraArgs];

@@ -9,7 +9,6 @@
 @interface BuildApplication : NSApplication <NSApplicationDelegate>
 {
     NSString *makefilePath;
-    NSArray *extraArgs;
 }
 
 @property (retain) NSString *makefilePath;
