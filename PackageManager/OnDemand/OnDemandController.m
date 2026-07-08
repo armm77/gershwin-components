@@ -127,6 +127,8 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
   BOOL _isTerminating;
   double _totalDownloadBytes;
   double _downloadedBytes;
+  CGFloat _lastFetchPct;
+  NSUInteger _completedFetchFiles;
 }
 
 - (instancetype)init
@@ -340,6 +342,8 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
   // Reset progress tracking counters
   _totalDownloadBytes = 0.0;
   _downloadedBytes = 0.0;
+  _lastFetchPct = -1.0;
+  _completedFetchFiles = 0;
 
   // Switch from confirmation to progress UI
   [_descriptionField setHidden:YES];
@@ -697,6 +701,64 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
 
 #pragma mark - Live Output from Backend
 
+/// Parse a size suffix (MB, kB, B) from the given string and convert to bytes.
+/// Assumes scanner has already scanned a double value at `rest`.
+static double _sizeSuffixToBytes(NSString *rest, double val)
+{
+  if ([rest rangeOfString:@"MB"].location != NSNotFound ||
+      [rest rangeOfString:@"MiB"].location != NSNotFound ||
+      [rest rangeOfString:@"MB"].location != NSNotFound)
+    return val * 1024.0 * 1024.0;
+  if ([rest rangeOfString:@"kB"].location != NSNotFound ||
+      [rest rangeOfString:@"KiB"].location != NSNotFound)
+    return val * 1024.0;
+  if ([rest rangeOfString:@"B"].location != NSNotFound)
+    return val;
+  return 0.0;
+}
+
+/// Try to parse "marker <number> <unit>" (unit after number).
+static double _parseSizeAfter(NSString *line, NSString *marker)
+{
+  NSRange r = [line rangeOfString:marker];
+  if (r.location == NSNotFound) return 0.0;
+  NSString *rest = [line substringFromIndex:r.location + r.length];
+  NSScanner *scanner = [NSScanner scannerWithString:rest];
+  double val;
+  if ([scanner scanDouble:&val])
+    return _sizeSuffixToBytes(rest, val);
+  return 0.0;
+}
+
+/// Try to parse "<number> <unit> marker" (unit before marker, e.g. "80 MB to be downloaded.").
+static double _parseSizeBefore(NSString *line, NSString *marker)
+{
+  NSRange r = [line rangeOfString:marker];
+  if (r.location == NSNotFound) return 0.0;
+  NSString *before = [line substringToIndex:r.location];
+  // Scan backwards: find the last number + unit before the marker
+  NSScanner *scanner = [NSScanner scannerWithString:before];
+  [scanner setCharactersToBeSkipped:nil];
+  double val = 0.0;
+  // Walk tokens from the end
+  NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+  NSString *trimmed = [before stringByTrimmingCharactersInSet:ws];
+  if ([trimmed length] == 0) return 0.0;
+  // Split on whitespace, last two meaningful tokens should be number and unit
+  NSArray *tokens = [trimmed componentsSeparatedByCharactersInSet:ws];
+  tokens = [tokens filteredArrayUsingPredicate:
+    [NSPredicate predicateWithFormat:@"length > 0"]];
+  NSInteger count = [tokens count];
+  if (count < 2) return 0.0;
+  NSString *lastUnit = tokens[count - 1];
+  NSString *lastNum  = tokens[count - 2];
+  // Check that lastNum is actually a number
+  NSScanner *numScan = [NSScanner scannerWithString:lastNum];
+  if ([numScan scanDouble:&val])
+    return _sizeSuffixToBytes(lastUnit, val);
+  return 0.0;
+}
+
 - (void)installDidOutputLine:(NSString *)line
 {
   if (!line) return;
@@ -704,28 +766,28 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
     if (_logController)
       [_logController appendLog:[line stringByAppendingString:@"\n"]];
 
-    // ── Parse "Need to get X MB/kB of archives" for total download size ──
+    // ═══════════════════════════════════════════════════════════
+    // 1. Total download size (first match across all backends)
+    // ═══════════════════════════════════════════════════════════
     if (_totalDownloadBytes == 0.0)
       {
-        NSRange r = [line rangeOfString:@"Need to get "];
-        if (r.location != NSNotFound)
-          {
-            NSString *rest = [line substringFromIndex:r.location + r.length];
-            NSScanner *scanner = [NSScanner scannerWithString:rest];
-            double val;
-            if ([scanner scanDouble:&val])
-              {
-                if ([rest rangeOfString:@"MB"].location != NSNotFound)
-                  _totalDownloadBytes = val * 1024.0 * 1024.0;
-                else if ([rest rangeOfString:@"kB"].location != NSNotFound)
-                  _totalDownloadBytes = val * 1024.0;
-                else if ([rest rangeOfString:@"B"].location != NSNotFound)
-                  _totalDownloadBytes = val;
-              }
-          }
+        // apt:   "Need to get X MB/kB of archives"
+        double sz = _parseSizeAfter(line, @"Need to get ");
+        if (sz == 0.0)
+          // pacman: "Total Download Size:  X.XX MB"
+          sz = _parseSizeAfter(line, @"Total Download Size: ");
+        if (sz == 0.0)
+          // pkg:   "X MB/kB to be downloaded."
+          sz = _parseSizeBefore(line, @" to be downloaded.");
+        if (sz > 0.0)
+          _totalDownloadBytes = sz;
       }
 
-    // ── Parse "Get:N ... [X MB/kB]" to track downloaded bytes ──
+    // ═══════════════════════════════════════════════════════════
+    // 2. Download-phase progress
+    // ═══════════════════════════════════════════════════════════
+
+    // 2a. apt: parse "Get:N ... [X MB/kB]" → _downloadedBytes
     if (_totalDownloadBytes > 0.0)
       {
         NSRange r = [line rangeOfString:@"["];
@@ -740,14 +802,7 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
                 double val;
                 if ([scanner scanDouble:&val])
                   {
-                    double bytes = 0.0;
-                    if ([sizeStr rangeOfString:@"MB"].location != NSNotFound)
-                      bytes = val * 1024.0 * 1024.0;
-                    else if ([sizeStr rangeOfString:@"kB"].location != NSNotFound)
-                      bytes = val * 1024.0;
-                    else if ([sizeStr rangeOfString:@"B"].location != NSNotFound)
-                      bytes = val;
-
+                    double bytes = _sizeSuffixToBytes(sizeStr, val);
                     if (bytes > 0.0)
                       {
                         _downloadedBytes += bytes;
@@ -761,7 +816,62 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
           }
       }
 
-    // ── Parse dpkg progress (e.g. "(Reading database ... 45%)") for install phase ──
+    // 2b. pacman 6+: total progress bar "Total ( n/m)  ... [####] XX%"
+    {
+      NSRange r = [line rangeOfString:@"Total ("];
+      if (r.location != NSNotFound)
+        {
+          // Find the last "%" in the line
+          NSRange pct = [line rangeOfString:@"%" options:NSBackwardsSearch];
+          if (pct.location != NSNotFound && pct.location > 2)
+            {
+              NSUInteger start = pct.location;
+              while (start > 0 && isdigit([line characterAtIndex:start - 1]))
+                start--;
+              if (start < pct.location)
+                {
+                  CGFloat p = [[line substringWithRange:
+                    NSMakeRange(start, pct.location - start)] floatValue] / 100.0;
+                  if (p >= 0.0 && p <= 1.0)
+                    {
+                      [_progressBar setIndeterminate:NO];
+                      [_progressBar setDoubleValue:0.05 + p * 0.7];
+                      [_progressBar displayIfNeeded];
+                    }
+                }
+            }
+        }
+    }
+
+    // 2c. FreeBSD pkg: "Fetching <pkg>: XX%" — track each file's completion
+    {
+      NSString *fetchPrefix = @"Fetching ";
+      if ([line hasPrefix:fetchPrefix])
+        {
+          NSRange pct = [line rangeOfString:@"%" options:NSBackwardsSearch];
+          if (pct.location != NSNotFound && pct.location > 2)
+            {
+              NSUInteger start = pct.location;
+              while (start > 0 && isdigit([line characterAtIndex:start - 1]))
+                start--;
+              if (start < pct.location)
+                {
+                  CGFloat filePct = [[line substringWithRange:
+                    NSMakeRange(start, pct.location - start)] floatValue] / 100.0;
+                  // When percentage drops, a new file started
+                  if (_lastFetchPct >= 0.99 && filePct < 0.1)
+                    _completedFetchFiles++;
+                  _lastFetchPct = filePct;
+                }
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 3. Install-phase progress  (dpkg, pacman, pkg)
+    // ═══════════════════════════════════════════════════════════
+
+    // 3a. dpkg: "(Reading database ... 45%)"
     {
       NSRange r = [line rangeOfString:@"%"];
       if (r.location != NSNotFound && r.location > 0)
@@ -771,13 +881,64 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
             start--;
           if (start < r.location)
             {
-              CGFloat pct = [[line substringWithRange:NSMakeRange(start, r.location - start)] floatValue] / 100.0;
+              CGFloat pct = [[line substringWithRange:
+                NSMakeRange(start, r.location - start)] floatValue] / 100.0;
               if (pct >= 0.0 && pct <= 1.0)
                 {
                   [_progressBar setIndeterminate:NO];
                   [_progressBar setDoubleValue:0.75 + pct * 0.25];
                   [_progressBar displayIfNeeded];
                 }
+            }
+        }
+    }
+
+    // 3b. pacman install: "(n/m) installing/checking..." and
+    //     pkg install:     "[n/m] Installing/Extracting..."
+    {
+      // Try parentheses first: pacman "(n/m)"
+      NSRange open = [line rangeOfString:@"("];
+      NSRange close = [line rangeOfString:@")"];
+      if (open.location != NSNotFound && close.location != NSNotFound &&
+          close.location > open.location)
+        {
+          NSString *inner = [line substringWithRange:
+            NSMakeRange(open.location + 1,
+                        close.location - open.location - 1)];
+          NSArray *parts = [inner componentsSeparatedByString:@"/"];
+          if ([parts count] == 2)
+            {
+            CGFloat n = [parts[0] floatValue];
+            CGFloat m = [parts[1] floatValue];
+            if (n >= 1.0 && m >= n)
+              {
+                [_progressBar setIndeterminate:NO];
+                [_progressBar setDoubleValue:0.75 + (n / m) * 0.25];
+                [_progressBar displayIfNeeded];
+              }
+            }
+        }
+
+      // Try brackets: pkg "[n/m]"
+      NSRange ob = [line rangeOfString:@"["];
+      NSRange cb = [line rangeOfString:@"]"];
+      if (ob.location != NSNotFound && cb.location != NSNotFound &&
+          cb.location > ob.location)
+        {
+          NSString *inner = [line substringWithRange:
+            NSMakeRange(ob.location + 1,
+                        cb.location - ob.location - 1)];
+          NSArray *parts = [inner componentsSeparatedByString:@"/"];
+          if ([parts count] == 2)
+            {
+            CGFloat n = [parts[0] floatValue];
+            CGFloat m = [parts[1] floatValue];
+            if (n >= 1.0 && m >= n)
+              {
+                [_progressBar setIndeterminate:NO];
+                [_progressBar setDoubleValue:0.75 + (n / m) * 0.25];
+                [_progressBar displayIfNeeded];
+              }
             }
         }
     }
