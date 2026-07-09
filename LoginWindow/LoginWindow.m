@@ -633,7 +633,7 @@ void signalHandler(int sig) {
     [contentView addSubview:restartButton];
 
     loginButton = [[NSButton alloc] initWithFrame:NSMakeRect(rightX, buttonY, buttonWidth, buttonHeight)];
-    [loginButton setTitle:@"Login"];
+    [loginButton setTitle:@"Log In"];
     [loginButton setTarget:self];
     [loginButton setAction:@selector(loginButtonPressed:)];
     [loginButton setKeyEquivalent:@"\r"];
