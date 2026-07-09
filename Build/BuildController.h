@@ -6,19 +6,22 @@
 
 #import <AppKit/AppKit.h>
 
+@class BWLogWindowController;
+
 @interface BuildController : NSObject <NSWindowDelegate>
 {
-    NSWindow *window;
-    NSTextField *statusLabel;
-    NSProgressIndicator *progressBar;
-    NSScrollView *outputScrollView;
-    NSTextView *outputView;
+    NSWindow *_window;
+    NSTextField *_statusField;
+    NSProgressIndicator *_progressBar;
+    NSButton *_cancelButton;
+
     NSTask *buildTask;
     NSPipe *outputPipe;
     NSString *makefilePath;
     NSTask *installTask;
     NSPipe *installPipe;
     BOOL installShouldLaunch;
+    BWLogWindowController *_logController;
 }
 
 @property (strong) NSString *makefilePath;
@@ -28,5 +31,6 @@
 
 - (void)showWindow;
 - (void)startBuild;
+- (void)showLog:(id)sender;
 
 @end
