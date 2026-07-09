@@ -11,14 +11,15 @@ NSArray<NSString *> *CLMAvailableRepositories(void)
     static NSArray<NSString *> *repos = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        repos = @[
-            @"https://api.github.com/repos/gershwin-desktop/gershwin-on-freebsd/releases",
-            @"https://api.github.com/repos/gershwin-desktop/gershwin-on-devuan/releases",
-            @"https://api.github.com/repos/gershwin-desktop/gershwin-on-debian/releases",
-            @"https://api.github.com/repos/gershwin-desktop/gershwin-on-arch/releases",
-            @"https://api.github.com/repos/pkgdemon/gershwin-on-nextbsd/releases",
-            @"https://api.github.com/repos/ventoy/Ventoy/releases",
-        ];
+        NSString *path = [[NSBundle mainBundle] pathForResource:@"Repositories"
+                                                         ofType:@"plist"];
+        NSArray *slugs = [NSArray arrayWithContentsOfFile:path];
+        NSMutableArray *urls = [NSMutableArray arrayWithCapacity:[slugs count]];
+        for (NSString *slug in slugs) {
+            [urls addObject:[NSString stringWithFormat:
+                @"https://api.github.com/repos/%@/releases", slug]];
+        }
+        repos = [urls copy];
     });
     return repos;
 }

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<string>gershwin-desktop/gershwin-on-freebsd</string>
+	<string>gershwin-desktop/gershwin-on-devuan</string>
+	<string>gershwin-desktop/gershwin-on-debian</string>
+	<string>gershwin-desktop/gershwin-on-arch</string>
+	<string>gershwin-desktop/gershwin-on-nextbsd</string>
+	<string>ventoy/Ventoy</string>
+</array>
+</plist>

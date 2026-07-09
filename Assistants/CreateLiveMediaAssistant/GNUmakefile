@@ -30,6 +30,7 @@ CreateLiveMediaAssistant_RESOURCE_FILES = \
 	Resources/Create_Live_Media.svg \
 	Resources/bgusb.png \
 	Resources/usbsuccess.svg \
+	Resources/Repositories.plist \
 	Resources/en.lproj/Localizable.strings \
 	Resources/de.lproj/Localizable.strings
 

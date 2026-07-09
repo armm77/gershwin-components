@@ -48,37 +48,45 @@
                                                      error:&connectionError];
     
     if (connectionError) {
-        NSDebugLLog(@"gwcomp", @"CLMGitHubAPI: Connection error: %@", [connectionError localizedDescription]);
+        NSLog(@"CLMGitHubAPI: Connection error for %@: %@", repoURL, [connectionError localizedDescription]);
         return releases;
     }
     
     if (!data || [data length] == 0) {
-        NSDebugLLog(@"gwcomp", @"CLMGitHubAPI: No data received");
+        NSLog(@"CLMGitHubAPI: No data received for %@", repoURL);
         return releases;
     }
     
     NSInteger statusCode = [response statusCode];
+    NSLog(@"CLMGitHubAPI: HTTP %ld for %@", (long)statusCode, repoURL);
     if (statusCode != 200) {
-        NSDebugLLog(@"gwcomp", @"CLMGitHubAPI: HTTP error %ld", (long)statusCode);
+        NSString *body = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        NSLog(@"CLMGitHubAPI: Response body: %@", body);
         return releases;
     }
     
     // Parse JSON response
     NSError *jsonError = nil;
     id jsonResult = [NSJSONSerialization JSONObjectWithData:data
-                                                    options:0
-                                                      error:&jsonError];
+                                                     options:0
+                                                       error:&jsonError];
     
     if (jsonError || ![jsonResult isKindOfClass:[NSArray class]]) {
-        NSDebugLLog(@"gwcomp", @"CLMGitHubAPI: JSON parsing error: %@", [jsonError localizedDescription]);
+        NSLog(@"CLMGitHubAPI: JSON parsing error: %@", [jsonError localizedDescription]);
+        NSString *body = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        NSLog(@"CLMGitHubAPI: Raw response (first 2000 chars): %@", [body substringToIndex:MIN([body length], 2000)]);
         return releases;
     }
     
     NSArray *jsonReleases = (NSArray *)jsonResult;
+    NSLog(@"CLMGitHubAPI: Found %lu releases in JSON", (unsigned long)[jsonReleases count]);
     
     // Convert JSON to CLMRelease objects
     for (NSDictionary *releaseDict in jsonReleases) {
-        if (![releaseDict isKindOfClass:[NSDictionary class]]) continue;
+        if (![releaseDict isKindOfClass:[NSDictionary class]]) {
+            NSLog(@"CLMGitHubAPI: Skipping non-dictionary entry in releases array");
+            continue;
+        }
         
         CLMRelease *release = [[CLMRelease alloc] init];
         
@@ -97,9 +105,13 @@
             release.updatedAt = [formatter dateFromString:dateString];
         }
         
+        NSLog(@"CLMGitHubAPI: Release: tag=%@ name=%@ prerelease=%d published=%@",
+              release.tagName, release.name, release.prerelease, dateString);
+        
         // Parse assets
         NSArray *assetsArray = [releaseDict objectForKey:@"assets"];
         if (assetsArray && [assetsArray isKindOfClass:[NSArray class]]) {
+            NSLog(@"CLMGitHubAPI:   assets count: %lu", (unsigned long)[assetsArray count]);
             NSMutableArray *assetObjects = [NSMutableArray array];
             
             for (NSDictionary *assetDict in assetsArray) {
@@ -119,19 +131,26 @@
                     asset.updatedAt = [formatter dateFromString:assetDateString];
                 }
                 
+                NSLog(@"CLMGitHubAPI:   asset: name=%@ size=%lld url=%@",
+                      asset.name, asset.size, asset.browserDownloadURL);
                 [assetObjects addObject:asset];
             }
             
             release.assets = assetObjects;
         }
+        else {
+            NSLog(@"CLMGitHubAPI:   no assets array or not an array");
+        }
         
         // Filter by prerelease preference
         if (!release.prerelease || includePrereleases) {
             [releases addObject:release];
+        } else {
+            NSLog(@"CLMGitHubAPI:   skipping prerelease (includePrereleases=NO)");
         }
     }
     
-    NSDebugLLog(@"gwcomp", @"CLMGitHubAPI: Fetched %lu releases", (unsigned long)[releases count]);
+    NSLog(@"CLMGitHubAPI: Fetched %lu releases total", (unsigned long)[releases count]);
     return releases;
 }
 
@@ -142,19 +161,29 @@
     NSMutableArray *isoAssets = [NSMutableArray array];
     
     for (CLMRelease *release in releases) {
-        if (!includePrereleases && release.prerelease) continue;
+        NSLog(@"CLMGitHubAPI: extractISO: considering release tag=%@ prerelease=%d assets=%lu",
+              release.tagName, release.prerelease, (unsigned long)[release.assets count]);
+        
+        if (!includePrereleases && release.prerelease) {
+            NSLog(@"CLMGitHubAPI: extractISO:   skipped (prerelease, not included)");
+            continue;
+        }
         
         // Skip prereleases older than 6 months
         if (release.prerelease && release.updatedAt) {
             NSTimeInterval sixMonthsAgo = -6 * 30 * 24 * 60 * 60; // Approximate 6 months in seconds
             NSDate *cutoffDate = [NSDate dateWithTimeIntervalSinceNow:sixMonthsAgo];
             if ([release.updatedAt compare:cutoffDate] == NSOrderedAscending) {
+                NSLog(@"CLMGitHubAPI: extractISO:   skipped (prerelease older than 6 months, updatedAt=%@, cutoff=%@)",
+                      release.updatedAt, cutoffDate);
                 continue;
             }
         }
         
         for (CLMAsset *asset in release.assets) {
-            if ([CLMStreamOperation isImageAssetName:asset.browserDownloadURL]) {
+            BOOL isImage = [CLMStreamOperation isImageAssetName:asset.browserDownloadURL];
+            NSLog(@"CLMGitHubAPI: extractISO:   asset name=%@ isImage=%d", asset.name, isImage);
+            if (isImage) {
                 // Create a composite object with both release and asset info
                 NSMutableDictionary *assetInfo = [NSMutableDictionary dictionary];
                 [assetInfo setObject:asset.name forKey:@"name"];
@@ -176,7 +205,7 @@
         }
     }
     
-    NSDebugLLog(@"gwcomp", @"CLMGitHubAPI: Found %lu ISO assets", (unsigned long)[isoAssets count]);
+    NSLog(@"CLMGitHubAPI: Found %lu ISO assets total", (unsigned long)[isoAssets count]);
     return isoAssets;
 }
 
