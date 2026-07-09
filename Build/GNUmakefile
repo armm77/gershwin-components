@@ -16,11 +16,7 @@ ADDITIONAL_GUI_LIBS += -ldispatch
 Build_APPLICATION_ICON = Build.png
 
 Build_RESOURCE_FILES = \
-	Resources/check.png
+	Resources/check.png \
+	Info-gnustep.plist
 
 include $(GNUSTEP_MAKEFILES)/application.make
-
-after-$(APP_NAME)-all::
-	awk '{gsub(/; }$$/, "; NSTypes = ( { CFBundleTypeName = Makefile; CFBundleTypeRole = Editor; NSUnixExtensions = (GNUmakefile, \"GNUmakefile.in\", Makefile, makefile); }, ); }"); print}' \
-	  $(APP_NAME).app/Resources/Info-gnustep.plist > $(APP_NAME).app/Resources/Info-gnustep.plist.tmp && \
-	  mv $(APP_NAME).app/Resources/Info-gnustep.plist.tmp $(APP_NAME).app/Resources/Info-gnustep.plist
