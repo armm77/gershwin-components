@@ -21,4 +21,6 @@ Build_RESOURCE_FILES = \
 include $(GNUSTEP_MAKEFILES)/application.make
 
 after-$(APP_NAME)-all::
-	sed -i 's/; }$$/; CFBundleDocumentTypes = ( { CFBundleTypeName = Makefile; CFBundleTypeRole = Editor; CFBundleTypeExtensions = (Makefile, makefile, GNUmakefile, GNUmakefile.in); }, ); }/' $(APP_NAME).app/Resources/Info-gnustep.plist
+	awk '{gsub(/; }$$/, "; CFBundleDocumentTypes = ( { CFBundleTypeName = Makefile; CFBundleTypeRole = Editor; CFBundleTypeExtensions = (Makefile, makefile, GNUmakefile, GNUmakefile.in); }, ); }"); print}' \
+	  $(APP_NAME).app/Resources/Info-gnustep.plist > $(APP_NAME).app/Resources/Info-gnustep.plist.tmp && \
+	  mv $(APP_NAME).app/Resources/Info-gnustep.plist.tmp $(APP_NAME).app/Resources/Info-gnustep.plist

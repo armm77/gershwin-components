@@ -22,6 +22,8 @@ int main(int argc, const char *argv[])
             NSString *arg = [args objectAtIndex: i];
             if ([arg isEqualToString: @"-makefilePath"]) {
                 nextIsMakefile = YES;
+            } else if ([arg isEqualToString: @"-GSFilePath"]) {
+                nextIsMakefile = YES;
             } else if ([arg isEqualToString: @"-h"] || [arg isEqualToString: @"-help"]) {
                 fprintf(stdout, "Usage: %s [-makefilePath <GNUmakefile>] [extra gmake args...]\n"
                                 "\n"
