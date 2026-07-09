@@ -36,19 +36,19 @@
     <string>public.app-category.developer-tools</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 Gershwin Project. All rights reserved.</string>
-    <key>CFBundleDocumentTypes</key>
+    <key>NSTypes</key>
     <array>
         <dict>
             <key>CFBundleTypeName</key>
             <string>Makefile</string>
             <key>CFBundleTypeRole</key>
             <string>Editor</string>
-            <key>CFBundleTypeExtensions</key>
+            <key>NSUnixExtensions</key>
             <array>
-                <string>Makefile</string>
-                <string>makefile</string>
                 <string>GNUmakefile</string>
                 <string>GNUmakefile.in</string>
+                <string>Makefile</string>
+                <string>makefile</string>
             </array>
         </dict>
     </array>
