@@ -46,7 +46,9 @@
             <key>NSUnixExtensions</key>
             <array>
                 <string>GNUmakefile</string>
+                <string>gnumakefile</string>
                 <string>GNUmakefile.in</string>
+                <string>gnumakefile.in</string>
                 <string>Makefile</string>
                 <string>makefile</string>
             </array>
