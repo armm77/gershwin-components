@@ -242,9 +242,9 @@ kill_fuse_by_dev() {
       }')
   fi
   [ -z "$pids" ] && return 0
-  echo "$pids" | while IFS= read -r pid; do [ -n "$pid" ] && kill "$pid" 2>/dev/null; done
+  echo "$pids" | while IFS= read -r pid; do [ -n "$pid" ] && kill "$pid" 2>/dev/null || true; done
   sleep 2
-  echo "$pids" | while IFS= read -r pid; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null; done
+  echo "$pids" | while IFS= read -r pid; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true; done
 }
 
 # Function: unmount everything under $MNT
