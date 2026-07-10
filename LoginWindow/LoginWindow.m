@@ -257,6 +257,7 @@ void signalHandler(int sig) {
     signal(SIGTERM, signalHandler);
     signal(SIGINT, signalHandler);
     signal(SIGCHLD, signalHandler);
+    signal(SIGPIPE, SIG_IGN);
     
     // X server should already be running from main() - just verify
     if (![self isXServerRunning]) {
