@@ -108,6 +108,11 @@ static const CGFloat kLineHeight = 18.0;
 
 #pragma mark - BuildController
 
+@interface BuildController ()
+@property (strong) NSArray *blacklist;
+- (BOOL)isItemBlacklisted:(NSString *)item;
+@end
+
 @implementation BuildController
 
 @synthesize makefilePath;
@@ -615,8 +620,16 @@ static const CGFloat kLineHeight = 18.0;
         if (check) [alert setIcon:check];
     }
 
+    BOOL canLaunch = NO;
     if (status == 0) {
-        [alert addButtonWithTitle:@"Install and Launch"];
+        NSString *ext = [self productExtensionFromMakefile];
+        canLaunch = [ext isEqualToString:@"app"] || [ext isEqualToString:@"prefPane"];
+    }
+
+    if (status == 0) {
+        if (canLaunch) {
+            [alert addButtonWithTitle:@"Install and Launch"];
+        }
         [alert addButtonWithTitle:@"Install"];
     }
     [alert addButtonWithTitle: (status == 0) ? @"OK" : @"Cancel"];
@@ -625,15 +638,15 @@ static const CGFloat kLineHeight = 18.0;
     }
 
     NSInteger button = [alert runModal];
-    NSLog(@"buildFinished: button=%ld (status=%d)", (long)button, status);
+    NSLog(@"buildFinished: button=%ld (status=%d, canLaunch=%d)", (long)button, status, canLaunch);
 
-    if (status == 0 && button == NSAlertFirstButtonReturn) {
+    if (status == 0 && canLaunch && button == NSAlertFirstButtonReturn) {
         NSLog(@"buildFinished: Install and Launch");
         [self startInstallWithLaunch:YES];
-    } else if (status == 0 && button == NSAlertSecondButtonReturn) {
+    } else if (status == 0 && button == (canLaunch ? NSAlertSecondButtonReturn : NSAlertFirstButtonReturn)) {
         NSLog(@"buildFinished: Install");
         [self startInstallWithLaunch:NO];
-    } else if (status == 0 && button == NSAlertThirdButtonReturn) {
+    } else if (status == 0) {
         NSLog(@"buildFinished: OK -> quit");
         [NSApp stop:self];
         [NSApp terminate:self];
@@ -756,59 +769,70 @@ static const CGFloat kLineHeight = 18.0;
 
     if (_window) [_window orderOut:nil];
 
-    NSString *title;
-    NSString *msg;
-    if (status == 0) {
-        [_statusField setStringValue:@"Install completed"];
-        title = @"Install Succeeded";
-        msg = @"The application was installed successfully.";
-    } else {
+    if (status != 0) {
         [_statusField setStringValue:@"Install failed"];
-        title = @"Install Failed";
-        msg = [self formatErrorOutput:self.buildOutput];
-    }
 
-    NSAlert *alert = [[NSAlert alloc] init];
-    [alert setMessageText:title];
-    [alert setInformativeText:msg];
-    if (status == 0) {
-        NSImage *check = [NSImage imageNamed:@"check"];
-        if (check) [alert setIcon:check];
-        [alert addButtonWithTitle:@"OK"];
-    } else {
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:@"Install Failed"];
+        [alert setInformativeText:[self formatErrorOutput:self.buildOutput]];
         [alert addButtonWithTitle:@"Cancel"];
         [alert addButtonWithTitle:@"Show Build Log"];
-    }
-    NSInteger button = [alert runModal];
+        NSInteger button = [alert runModal];
 
-    if (status != 0) {
         if (button == NSAlertSecondButtonReturn) {
             [self showLog:nil];
             return;
-        } else {
-            [NSApp stop:self];
-            [NSApp terminate:self];
         }
-    }
-
-    if (status == 0) {
-        if (installShouldLaunch) {
-            NSString *appName = [self appNameFromMakefile];
-            if (appName) {
-                [[NSWorkspace sharedWorkspace] findApplications];
-                NSString *appPath = [[NSWorkspace sharedWorkspace] fullPathForApplication:appName];
-                if (appPath) {
-                    [[NSWorkspace sharedWorkspace] launchApplication:appPath];
-                    [self performSelector:@selector(terminateAfterDelay)
-                               withObject:nil
-                               afterDelay:3.0];
-                    return;
-                }
-            }
-        }
+        [NSApp stop:self];
         [NSApp terminate:self];
         return;
     }
+
+    [_statusField setStringValue:@"Install completed"];
+
+    if (installShouldLaunch) {
+        NSString *name = [self productNameFromMakefile];
+        NSString *ext = [self productExtensionFromMakefile];
+        if (name) {
+            NSString *productPath = nil;
+            if ([ext isEqualToString:@"prefPane"]) {
+                NSString *bundlesDir = [NSSearchPathForDirectoriesInDomains(
+                    NSLibraryDirectory, NSSystemDomainMask, YES) lastObject];
+                bundlesDir = [bundlesDir stringByAppendingPathComponent:@"Bundles"];
+                productPath = [[bundlesDir stringByAppendingPathComponent:name]
+                    stringByAppendingPathExtension:ext];
+                if (![[NSFileManager defaultManager] fileExistsAtPath:productPath]) {
+                    productPath = nil;
+                }
+            } else {
+                [[NSWorkspace sharedWorkspace] findApplications];
+                productPath = [[NSWorkspace sharedWorkspace] fullPathForApplication:name];
+            }
+            if (productPath) {
+                if ([ext isEqualToString:@"prefPane"]) {
+                    [[NSWorkspace sharedWorkspace] launchApplication:@"SystemPreferences"];
+                } else {
+                    NSString *exec = [productPath stringByAppendingPathComponent:
+                        [[productPath lastPathComponent] stringByDeletingPathExtension]];
+                    if ([[NSFileManager defaultManager] isExecutableFileAtPath:exec]) {
+                        [NSTask launchedTaskWithLaunchPath:exec arguments:@[]];
+                    }
+                }
+                [self performSelector:@selector(terminateAfterDelay)
+                           withObject:nil
+                           afterDelay:3.0];
+                return;
+            }
+        }
+
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:@"Launch Failed"];
+        [alert setInformativeText:@"The application was installed, but could not be launched.."];
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+    }
+
+    [NSApp terminate:self];
 }
 
 - (void)terminateAfterDelay
@@ -818,7 +842,7 @@ static const CGFloat kLineHeight = 18.0;
 
 #pragma mark - Helpers
 
-- (NSString *)appNameFromMakefile
+- (NSString *)productNameFromMakefile
 {
     NSString *content = [NSString stringWithContentsOfFile:makefilePath
                                                   encoding:NSUTF8StringEncoding
@@ -829,23 +853,180 @@ static const CGFloat kLineHeight = 18.0;
     for (NSString *line in lines) {
         NSString *trimmed = [line stringByTrimmingCharactersInSet:
             [NSCharacterSet whitespaceCharacterSet]];
-        if ([trimmed hasPrefix:@"APP_NAME"]) {
-            NSScanner *scanner = [NSScanner scannerWithString:trimmed];
-            [scanner scanUpToString:@"=" intoString:NULL];
-            [scanner scanString:@"=" intoString:NULL];
-            NSString *name = nil;
-            [scanner scanUpToString:@"\n" intoString:&name];
-            name = [name stringByTrimmingCharactersInSet:
-                [NSCharacterSet whitespaceCharacterSet]];
+        if ([trimmed hasPrefix:@"APP_NAME"] || [trimmed hasPrefix:@"BUNDLE_NAME"] ||
+            [trimmed hasPrefix:@"TOOL_NAME"]) {
+            NSString *name = [self parseVariableValue:trimmed];
             if ([name length] > 0) return name;
         }
     }
     return nil;
 }
 
+- (NSString *)productExtensionFromMakefile
+{
+    NSString *content = [NSString stringWithContentsOfFile:makefilePath
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:NULL];
+    if (!content) return nil;
+
+    NSArray *lines = [content componentsSeparatedByString:@"\n"];
+    BOOL hasBundleName = NO;
+    NSString *ext = nil;
+
+    for (NSString *line in lines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        if ([trimmed hasPrefix:@"BUNDLE_NAME"]) {
+            hasBundleName = YES;
+        } else if ([trimmed hasPrefix:@"BUNDLE_EXTENSION"]) {
+            ext = [self parseVariableValue:trimmed];
+        } else if ([trimmed hasPrefix:@"APP_NAME"]) {
+            return @"app";
+        } else if ([trimmed hasPrefix:@"TOOL_NAME"]) {
+            return @"tool";
+        }
+    }
+
+    if (hasBundleName) {
+        if ([ext length] > 0) {
+            // Strip leading dot if present
+            if ([ext hasPrefix:@"."]) {
+                ext = [ext substringFromIndex:1];
+            }
+            return ext;
+        }
+        return @"bundle";
+    }
+
+    return @"app";
+}
+
+- (NSString *)scanMissingHeaders:(NSArray *)lines
+{
+    NSMutableArray *missing = [NSMutableArray array];
+    for (NSString *line in lines) {
+        NSScanner *scanner = [NSScanner scannerWithString:line];
+        NSString *header;
+        if ([scanner scanUpToString:@"fatal error: '" intoString:NULL]) {
+            if ([scanner scanString:@"fatal error: '" intoString:NULL]) {
+                if ([scanner scanUpToString:@"' file not found" intoString:&header]) {
+                    if ([header length] > 0) {
+                        [missing addObject:header];
+                    }
+                }
+            }
+        }
+    }
+    if ([missing count] > 0) {
+        return [self formatMissingItems:@"header" items:missing];
+    }
+    return nil;
+}
+
+- (NSString *)scanMissingLibraries:(NSArray *)lines
+{
+    NSMutableArray *missing = [NSMutableArray array];
+    for (NSString *line in lines) {
+        // GNU ld: /bin/ld: cannot find -lmpv: No such file or directory
+        // Apple ld: ld: library not found for -lmpv
+        NSScanner *scanner = [NSScanner scannerWithString:line];
+        NSString *lib;
+        [scanner scanUpToString:@"cannot find -l" intoString:NULL];
+        if ([scanner scanString:@"cannot find -l" intoString:NULL]) {
+            NSCharacterSet *stop = [NSCharacterSet characterSetWithCharactersInString:@": \t"];
+            if ([scanner scanUpToCharactersFromSet:stop intoString:&lib]) {
+                if ([lib length] > 0) {
+                    [missing addObject:lib];
+                }
+            }
+        } else {
+            scanner = [NSScanner scannerWithString:line];
+            [scanner scanUpToString:@"library not found for -l" intoString:NULL];
+            if ([scanner scanString:@"library not found for -l" intoString:NULL]) {
+                NSCharacterSet *stop = [NSCharacterSet characterSetWithCharactersInString:@": \t"];
+                if ([scanner scanUpToCharactersFromSet:stop intoString:&lib]) {
+                    if ([lib length] > 0) {
+                        [missing addObject:lib];
+                    }
+                }
+            }
+        }
+    }
+    if ([missing count] > 0) {
+        return [self formatMissingItems:@"library" items:missing];
+    }
+    return nil;
+}
+
+- (BOOL)isItemBlacklisted:(NSString *)item
+{
+    if (!self.blacklist) {
+        NSString *path = [[NSBundle mainBundle] pathForResource:@"Blacklist" ofType:@"plist"];
+        if (path) {
+            self.blacklist = [NSArray arrayWithContentsOfFile:path];
+        }
+        if (!self.blacklist) {
+            self.blacklist = @[];
+        }
+    }
+    NSString *stem = [[item lowercaseString] stringByDeletingPathExtension];
+    for (NSString *blacklisted in self.blacklist) {
+        NSString *b = [blacklisted lowercaseString];
+        if ([stem isEqualToString:b]) return YES;
+        if ([stem hasPrefix:b]) return YES;
+    }
+    return NO;
+}
+
+- (NSString *)formatMissingItems:(NSString *)kind items:(NSArray *)items
+{
+    NSMutableArray *allowed = [NSMutableArray array];
+    NSMutableArray *blocked = [NSMutableArray array];
+    for (NSString *item in items) {
+        if ([self isItemBlacklisted:item]) {
+            [blocked addObject:item];
+        } else {
+            [allowed addObject:item];
+        }
+    }
+
+    NSMutableString *friendly = [NSMutableString string];
+
+    if ([blocked count] > 0) {
+        [friendly appendString:@"The build failed because it requires an unsupported technology:\n\n"];
+        for (NSString *item in blocked) {
+            [friendly appendFormat:@"  • %@\n", item];
+        }
+    }
+
+    if ([allowed count] > 0) {
+        if ([blocked count] > 0) {
+            [friendly appendString:@"\nAdditionally, a required package is missing:\n\n"];
+        } else {
+            [friendly appendFormat:@"The build failed because a required %@ is missing:\n\n", kind];
+        }
+        for (NSString *item in allowed) {
+            [friendly appendFormat:@"  • %@\n", item];
+        }
+    }
+
+    if ([allowed count] > 0) {
+        [friendly appendString:@"\nAfter installing the corresponding development package, try building again."];
+    } else if ([blocked count] > 0) {
+        [friendly appendString:@"\nPlease consider an alternative, as this technology is not planned to be supported on this system."];
+    }
+    return friendly;
+}
+
 - (NSString *)formatErrorOutput:(NSString *)output
 {
     NSArray *lines = [output componentsSeparatedByString:@"\n"];
+
+    NSString *headerMsg = [self scanMissingHeaders:lines];
+    if (headerMsg) return headerMsg;
+
+    NSString *libMsg = [self scanMissingLibraries:lines];
+    if (libMsg) return libMsg;
 
     NSMutableArray *cleanLines = [NSMutableArray array];
     for (NSString *line in lines) {
@@ -877,6 +1058,17 @@ static const CGFloat kLineHeight = 18.0;
     }
 
     return formattedOutput;
+}
+
+- (NSString *)parseVariableValue:(NSString *)line
+{
+    NSScanner *scanner = [NSScanner scannerWithString:line];
+    [scanner scanUpToString:@"=" intoString:NULL];
+    [scanner scanString:@"=" intoString:NULL];
+    NSString *value = nil;
+    [scanner scanUpToString:@"\n" intoString:&value];
+    return [value stringByTrimmingCharactersInSet:
+        [NSCharacterSet whitespaceCharacterSet]];
 }
 
 - (void)windowWillClose:(NSNotification *)notification

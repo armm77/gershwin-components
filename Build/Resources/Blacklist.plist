@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+    <string>glib</string>
+    <string>gtk</string>
+    <string>wayland</string>
+    <string>pipewire</string>
+    <string>pango</string>
+    <string>cairo</string>
+    <string>libadwaita</string>
+    <string>gio</string>
+    <string>gobject</string>
+    <string>gst</string>
+    <string>gstreamer</string>
+    <string>dbus</string>
+    <string>polkit</string>
+    <string>jack</string>
+    <string>pulse</string>
+    <string>flatpak</string>
+    <string>selinux</string>
+    <string>nm</string>
+    <string>dconf</string>
+    <string>NetworkManager</string>
+    <string>ModemManager</string>
+    <string>modemmanager</string>
+    <string>at-spi</string>
+    <string>udisks</string>
+    <string>storaged</string>
+    <string>upower</string>
+</array>
+</plist>
