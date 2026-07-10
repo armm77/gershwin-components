@@ -1291,6 +1291,7 @@ void signalHandler(int sig) {
             
             // Set the username field (for logging purposes)
             [usernameField setStringValue:autoLoginUser];
+            [self updatePasswordFieldVisibility];
             
             // Start the session without password authentication for auto-login
             // Note: This bypasses password authentication for auto-login
@@ -2034,6 +2035,7 @@ static bool isDetachedDaemon(const char *comm)
         // No last user, focus on username field
         [loginWindow makeFirstResponder:usernameField];
     }
+    [self updatePasswordFieldVisibility];
     
     [self showStatus:@""];
     
@@ -2761,11 +2763,14 @@ static bool isDetachedDaemon(const char *comm)
     BOOL hide = NO;
 #if defined(__linux__)
     if (username && [username length] > 0) {
-        struct spwd *sp = getspnam([username UTF8String]);
-        if (sp && sp->sp_pwdp && sp->sp_pwdp[0] == '\0') {
-            hide = YES;
-        } else if (!sp) {
-            hide = YES;
+        struct passwd *pw = getpwnam([username UTF8String]);
+        if (pw) {
+            struct spwd *sp = getspnam([username UTF8String]);
+            if (sp && sp->sp_pwdp && sp->sp_pwdp[0] == '\0') {
+                hide = YES;
+            } else if (!sp) {
+                hide = YES;
+            }
         }
     }
 #endif
@@ -2824,7 +2829,8 @@ static bool isDetachedDaemon(const char *comm)
     [usernameField setStringValue:@""];
     [passwordField setStringValue:@""];
     
-    // Update login button state (should be disabled now)
+    // Update password field visibility and login button state
+    [self updatePasswordFieldVisibility];
     [self updateLoginButtonState];
     
     // Focus on username field
