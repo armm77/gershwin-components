@@ -54,6 +54,9 @@
 #ifdef HAVE_SHADOW
 #import <shadow.h>
 #endif
+#if defined(__linux__)
+#import <shadow.h>
+#endif
 
 // Global flag to track X I/O errors
 static volatile BOOL xIOErrorOccurred = NO;
@@ -579,7 +582,7 @@ void signalHandler(int sig) {
     [contentView addSubview:usernameField];
 
     // Password field
-    NSTextField *passwordLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(50, 150+12, 100, 20)];
+    passwordLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(50, 150+12, 100, 20)];
     [passwordLabel setStringValue:@"Password:"];
     [passwordLabel setBezeled:NO];
     [passwordLabel setDrawsBackground:NO];
@@ -682,7 +685,9 @@ void signalHandler(int sig) {
         [loginWindow makeFirstResponder:usernameField];
     }
     
-    // Update login button state after setting up fields
+    // Update login button state and password field visibility after
+    // setting up fields
+    [self updatePasswordFieldVisibility];
     [self updateLoginButtonState];
 }
 
@@ -2750,11 +2755,49 @@ static bool isDetachedDaemon(const char *comm)
           shouldEnable ? "yes" : "no");
 }
 
+- (void)updatePasswordFieldVisibility
+{
+    NSString *username = [usernameField stringValue];
+    BOOL hide = NO;
+#if defined(__linux__)
+    if (username && [username length] > 0) {
+        struct spwd *sp = getspnam([username UTF8String]);
+        if (sp && sp->sp_pwdp && sp->sp_pwdp[0] == '\0') {
+            hide = YES;
+        } else if (!sp) {
+            hide = YES;
+        }
+    }
+#endif
+    BOOL wasHidden = [passwordField isHidden];
+    [passwordField setHidden:hide];
+    [passwordLabel setHidden:hide];
+
+    if (hide != wasHidden) {
+        if (hide) {
+            [passwordField setStringValue:@""];
+            [usernameField setNextKeyView:loginButton];
+            [loginButton setNextKeyView:usernameField];
+            if ([loginWindow firstResponder] == passwordField) {
+                [loginWindow makeFirstResponder:loginButton];
+            }
+        } else {
+            [usernameField setNextKeyView:passwordField];
+            [passwordField setNextKeyView:usernameField];
+        }
+    }
+
+    NSDebugLLog(@"gwcomp", @"[DEBUG] Password field visibility: %s", hide ? "HIDDEN" : "VISIBLE");
+}
+
 - (void)controlTextDidChange:(NSNotification *)notification
 {
     NSTextField *textField = [notification object];
     
-    if (textField == usernameField || textField == passwordField) {
+    if (textField == usernameField) {
+        [self updatePasswordFieldVisibility];
+        [self updateLoginButtonState];
+    } else if (textField == passwordField) {
         [self updateLoginButtonState];
     }
 }

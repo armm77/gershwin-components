@@ -33,6 +33,7 @@
     NSWindow *loginWindow;
     NSTextField *usernameField;
     NSSecureTextField *passwordField;
+    NSTextField *passwordLabel;
     NSButton *loginButton;
     NSButton *shutdownButton;
     NSButton *restartButton;
@@ -80,6 +81,7 @@
 - (void)saveLastSession:(NSString *)sessionExec;
 - (NSString *)loadLastSession;
 - (void)updateLoginButtonState;
+- (void)updatePasswordFieldVisibility;
 - (void)clearFieldsAndShake;
 - (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector;
 - (void)showKeyboardLayoutLog:(id)sender;
