@@ -16,6 +16,11 @@
 #endif
 #endif
 #import <unistd.h>
+
+// P_SYSTEM flags kernel processes on BSDs
+#ifndef P_SYSTEM
+#define P_SYSTEM 0x00000004
+#endif
 #import <errno.h>
 #import <sys/wait.h>
 #import <string.h>
@@ -300,6 +305,7 @@ static ProcessesController *sharedController = nil;
                             info.residentMemory = (parsedRssLong * pageSize) / 1024; // convert pages -> KB
 
                             // Read command line
+                            BOOL hasCmdline = NO;
                             char cmdPath[256];
                             snprintf(cmdPath, sizeof(cmdPath), "/proc/%d/cmdline", pid);
                             FILE *cmdFile = fopen(cmdPath, "r");
@@ -307,6 +313,7 @@ static ProcessesController *sharedController = nil;
                                 char cmdLine[1024];
                                 size_t len = fread(cmdLine, 1, sizeof(cmdLine) - 1, cmdFile);
                                 if (len > 0) {
+                                    hasCmdline = YES;
                                     cmdLine[len] = '\0';
                                     // Replace null bytes with spaces
                                     for (size_t i = 0; i < len; i++) {
@@ -315,6 +322,12 @@ static ProcessesController *sharedController = nil;
                                     info.command = [NSString stringWithUTF8String:cmdLine];
                                 }
                                 fclose(cmdFile);
+                            }
+
+                            // Kernel threads have empty cmdline - skip them
+                            if (!hasCmdline) {
+                                fclose(statFile);
+                                continue;
                             }
 
                             if (!info.command || [info.command length] == 0) {
@@ -351,7 +364,29 @@ static ProcessesController *sharedController = nil;
                                 info.memory = 0.0;
                             }
 
-                            info.user = @"unknown"; // Would need to read uid and map to username
+                            // Read uid from /proc/<pid>/status and map to username
+                            char statusPath[256];
+                            snprintf(statusPath, sizeof(statusPath), "/proc/%d/status", pid);
+                            FILE *statusFile = fopen(statusPath, "r");
+                            if (statusFile) {
+                                char sline[256];
+                                while (fgets(sline, sizeof(sline), statusFile)) {
+                                    uid_t uid;
+                                    if (sscanf(sline, "Uid: %u", &uid) == 1) {
+                                        struct passwd *pw = getpwuid(uid);
+                                        if (pw) {
+                                            info.user = [NSString stringWithUTF8String:pw->pw_name];
+                                        } else {
+                                            info.user = [NSString stringWithFormat:@"%u", uid];
+                                        }
+                                        break;
+                                    }
+                                }
+                                fclose(statusFile);
+                            }
+                            if (!info.user) {
+                                info.user = @"unknown";
+                            }
 
                             [newProcesses addObject:info];
                             procAdded++;
@@ -377,6 +412,7 @@ static ProcessesController *sharedController = nil;
                             long ticksPerSec2 = sysconf(_SC_CLK_TCK);
                             for (int i = 0; i < count2; i++) {
                                 struct kinfo_proc *p = &procs2[i];
+                                if (p->ki_flag & P_SYSTEM) continue;
                                 ProcessInfo *info = [[ProcessInfo alloc] init];
                                 info.pid = p->ki_pid;
                                 info.ppid = p->ki_ppid;
@@ -441,6 +477,8 @@ static ProcessesController *sharedController = nil;
                             NSString *s = [NSString stringWithUTF8String:line];
                             ProcessInfo *pi = [[ProcessInfo alloc] initWithPsLine:s];
                             if (pi && pi.pid > 0) {
+                                // Skip kernel threads (command starts with '[')
+                                if ([pi.command hasPrefix:@"["]) continue;
                                 [newProcesses addObject:pi];
                             }
                         }
@@ -469,6 +507,7 @@ static ProcessesController *sharedController = nil;
                         long ticksPerSec = sysconf(_SC_CLK_TCK);
                         for (int i = 0; i < count; i++) {
                             struct kinfo_proc *p = &procs[i];
+                            if (p->ki_flag & P_SYSTEM) continue;
                             ProcessInfo *info = [[ProcessInfo alloc] init];
                             info.pid = p->ki_pid;
                             info.ppid = p->ki_ppid;
