@@ -5,7 +5,6 @@
  */
 
 #import "LoginWindow.h"
-#import "KeyboardManager.h"
 #import <pwd.h>
 #import <unistd.h>
 #import <sys/wait.h>
@@ -215,6 +214,23 @@ void signalHandler(int sig) {
     }
 }
 
+@interface LWLogWindow : NSWindow @end
+
+@implementation LWLogWindow
+- (BOOL)performKeyEquivalent:(NSEvent *)event
+{
+    if (([event modifierFlags] & NSEventModifierFlagCommand)
+        && [[event charactersIgnoringModifiers] isEqualToString:@"l"]) {
+        id delegate = [[NSApplication sharedApplication] delegate];
+        if ([delegate respondsToSelector:@selector(showKeyboardLayoutLog:)]) {
+            [delegate showKeyboardLayoutLog:nil];
+            return YES;
+        }
+    }
+    return [super performKeyEquivalent:event];
+}
+@end
+
 @implementation LoginWindow
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
@@ -246,10 +262,10 @@ void signalHandler(int sig) {
     
     // Detect and apply keyboard layout immediately so LoginWindow and
     // the subsequent user session use the correct layout.
-    KeyboardManager *kbMgr = [[KeyboardManager alloc] init];
-    [kbMgr setupWithPasswd:NULL];
-    [kbMgr release];
+    _keyboardManager = [[KeyboardManager alloc] init];
+    [_keyboardManager setupWithPasswd:NULL];
     
+    [self createLogWindow];
     [self createLoginWindow];
     
     // Validate LoginWindow.plist security BEFORE anything accesses it
@@ -373,6 +389,9 @@ void signalHandler(int sig) {
 
 - (void)dealloc
 {
+    [_keyboardManager release];
+    [_logWindow release];
+    [_logTextView release];
     [pamAuth release];
     [super dealloc];
 }
@@ -504,7 +523,7 @@ void signalHandler(int sig) {
     char hostname[256] = "";
     gethostname(hostname, sizeof(hostname));
     NSString *computerName = [NSString stringWithUTF8String:hostname];
-    loginWindow = [[NSWindow alloc] 
+    loginWindow = [[LWLogWindow alloc] 
         initWithContentRect:windowFrame
                   styleMask:(NSWindowStyleMaskTitled)
                     backing:NSBackingStoreBuffered
@@ -2770,6 +2789,86 @@ static bool isDetachedDaemon(const char *comm)
     
     // Shake the window
     [self shakeWindow];
+}
+
+- (void)createLogWindow
+{
+    NSRect screenFrame = [[NSScreen mainScreen] frame];
+    CGFloat logHeight = screenFrame.size.height / 3.0;
+    NSRect logFrame = NSMakeRect(screenFrame.origin.x + 40,
+                                  screenFrame.origin.y + 40,
+                                  screenFrame.size.width - 80,
+                                  logHeight);
+
+    _logWindow = [[NSWindow alloc]
+        initWithContentRect:logFrame
+                  styleMask:(NSWindowStyleMaskTitled
+                            | NSWindowStyleMaskClosable
+                            | NSWindowStyleMaskResizable
+                            | NSWindowStyleMaskMiniaturizable)
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    [_logWindow setTitle:@"Keyboard Layout Log"];
+    [_logWindow setMinSize:NSMakeSize(400, 150)];
+
+    NSScrollView *scrollView = [[NSScrollView alloc]
+        initWithFrame:[[_logWindow contentView] bounds]];
+    [scrollView setHasVerticalScroller:YES];
+    [scrollView setHasHorizontalScroller:NO];
+    [scrollView setBorderType:NSNoBorder];
+    [scrollView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+
+    _logTextView = [[NSTextView alloc]
+        initWithFrame:NSMakeRect(0, 0,
+                                 [scrollView contentSize].width,
+                                 [scrollView contentSize].height)];
+    [_logTextView setMinSize:NSMakeSize(0, [scrollView contentSize].height)];
+    [_logTextView setMaxSize:NSMakeSize(FLT_MAX, FLT_MAX)];
+    [_logTextView setVerticallyResizable:YES];
+    [_logTextView setHorizontallyResizable:NO];
+    [_logTextView setEditable:NO];
+    [_logTextView setSelectable:YES];
+    [_logTextView setFont:[NSFont userFixedPitchFontOfSize:10]];
+    [_logTextView setTextColor:[NSColor darkGrayColor]];
+    [_logTextView setBackgroundColor:[NSColor whiteColor]];
+    [[_logTextView textContainer] setContainerSize:
+        NSMakeSize([scrollView contentSize].width, FLT_MAX)];
+    [[_logTextView textContainer] setWidthTracksTextView:YES];
+
+    [scrollView setDocumentView:_logTextView];
+    [[_logWindow contentView] addSubview:scrollView];
+    [scrollView release];
+
+    [_logWindow setReleasedWhenClosed:NO];
+}
+
+- (void)showKeyboardLayoutLog:(id)sender
+{
+    if (!_logWindow) {
+        [self createLogWindow];
+    }
+
+    NSDictionary *attrs = @{
+        NSFontAttributeName: [NSFont userFixedPitchFontOfSize:10],
+        NSForegroundColorAttributeName: [NSColor darkGrayColor]
+    };
+
+    NSString *log = [_keyboardManager detectionLog];
+    NSAttributedString *as;
+    if (log) {
+        as = [[NSAttributedString alloc] initWithString:log attributes:attrs];
+    } else {
+        as = [[NSAttributedString alloc] initWithString:
+            @"No keyboard layout detection data available.\n"
+            @"The layout was detected before the logging\n"
+            @"infrastructure was initialized."
+                                            attributes:attrs];
+    }
+    [[_logTextView textStorage] setAttributedString:as];
+    [as release];
+
+    [_logWindow orderFront:nil];
+    [_logWindow makeKeyWindow];
 }
 
 @end

@@ -25,6 +25,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import "LoginWindowPAM.h"
+#import "KeyboardManager.h"
 #import "AppearanceMetrics.h"
 
 @interface LoginWindow : NSObject <NSTextFieldDelegate, NSWindowDelegate>
@@ -49,6 +50,9 @@
     BOOL didStartXServer;
     pid_t xServerPid;
     BOOL isTerminating;
+    KeyboardManager *_keyboardManager;
+    NSWindow *_logWindow;
+    NSTextView *_logTextView;
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification;
@@ -78,5 +82,6 @@
 - (void)updateLoginButtonState;
 - (void)clearFieldsAndShake;
 - (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector;
+- (void)showKeyboardLayoutLog:(id)sender;
 
 @end

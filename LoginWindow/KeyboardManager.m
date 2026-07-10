@@ -21,6 +21,19 @@
 #define GW_LOGIN_GETPWCLASS(p) login_getpwclass(p)
 #endif
 #endif
+static NSMutableString *s_log = nil;
+
+static void KbdLog(NSString *fmt, ...)
+{
+    if (!s_log) return;
+    va_list ap;
+    va_start(ap, fmt);
+    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+    [s_log appendString:msg];
+    [msg release];
+}
+
 static const char *rpiKeyboardLayout(int idx)
 {
     static const char *table[15] = {
@@ -37,11 +50,17 @@ static BOOL detectKeyboardFromUSB(const char **layout,
                                   const char **options)
 {
 #if defined(__linux__)
+    KbdLog(@"    Scanning /sys/bus/usb/devices...\n");
     DIR *usb_dir = opendir("/sys/bus/usb/devices");
-    if (!usb_dir) return NO;
+    if (!usb_dir) {
+        KbdLog(@"    ✗ cannot open /sys/bus/usb/devices\n");
+        return NO;
+    }
     struct dirent *entry;
+    int dev_count = 0;
     while ((entry = readdir(usb_dir)) != NULL) {
         if (entry->d_name[0] == '.') continue;
+        dev_count++;
         char path[512];
         char vendor[16] = "", id_product[16] = "", prod_str[256] = "";
         snprintf(path, sizeof(path), "/sys/bus/usb/devices/%s/idVendor",
@@ -74,13 +93,13 @@ static BOOL detectKeyboardFromUSB(const char **layout,
         if (!fgets(prod_str, sizeof(prod_str), f)) { fclose(f); continue; }
         fclose(f);
         prod_str[strcspn(prod_str, "\n")] = '\0';
+        KbdLog(@"    USB device: %s:%s product=\"%s\"\n", vendor, id_product, prod_str);
         BOOL is_rpi = (strstr(prod_str, "RPI") != NULL
                        || strstr(prod_str, "Raspberry") != NULL
                        || strstr(prod_str, "raspberry") != NULL
                        || strstr(prod_str, "Pi ") != NULL);
         if (!is_rpi) {
-            NSLog(@"KeyboardManager: USB %s:%s product '%s' not an RPI keyboard, skipping",
-                  vendor, id_product, prod_str);
+            KbdLog(@"      not an RPI keyboard, skipping\n");
             continue;
         }
         const char *last_space = strrchr(prod_str, ' ');
@@ -88,8 +107,7 @@ static BOOL detectKeyboardFromUSB(const char **layout,
         if (last_space) {
             const char *tok = last_space + 1;
             if (*tok < '0' || *tok > '9') {
-                NSLog(@"KeyboardManager: USB %s:%s product '%s' has no trailing index, deferring",
-                      vendor, id_product, prod_str);
+                KbdLog(@"      no trailing index, deferring\n");
                 continue;
             }
             idx = atoi(tok);
@@ -98,16 +116,17 @@ static BOOL detectKeyboardFromUSB(const char **layout,
         *layout = rpiKeyboardLayout(idx);
         *variant = "";
         *options = "";
-        NSLog(@"KeyboardManager: RPI USB keyboard index %d -> layout '%s'",
-              idx, *layout);
+        KbdLog(@"      RPI keyboard index %d → layout=\"%s\"\n", idx, *layout);
         closedir(usb_dir);
         return YES;
     }
+    KbdLog(@"    %d USB device(s) scanned, no RPI keyboard found\n", dev_count);
     closedir(usb_dir);
 #else
     (void)layout;
     (void)variant;
     (void)options;
+    KbdLog(@"    ✗ only available on Linux\n");
 #endif
     return NO;
 }
@@ -116,24 +135,31 @@ static BOOL detectKeyboardFromDeviceTree(const char **layout,
                                          const char **options)
 {
 #if defined(__linux__)
+    KbdLog(@"    Path: /proc/device-tree/chosen/rpi-country-code\n");
     FILE *f = fopen("/proc/device-tree/chosen/rpi-country-code", "rb");
-    if (!f) return NO;
+    if (!f) {
+        KbdLog(@"    ✗ file does not exist\n");
+        return NO;
+    }
     unsigned char buf[4];
     size_t n = fread(buf, 1, sizeof(buf), f);
     fclose(f);
-    if (n != 4) return NO;
+    if (n != 4) {
+        KbdLog(@"    ✗ read %zu bytes (expected 4)\n", n);
+        return NO;
+    }
     int idx = (buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3];
     if (idx < 0 || idx > 14) idx = 0;
     *layout = rpiKeyboardLayout(idx);
     *variant = "";
     *options = "";
-    NSLog(@"KeyboardManager: RPI device-tree country-code %d -> layout '%s'",
-          idx, *layout);
+    KbdLog(@"    Country code: %d → layout=\"%s\"\n", idx, *layout);
     return YES;
 #else
     (void)layout;
     (void)variant;
     (void)options;
+    KbdLog(@"    ✗ only available on Linux\n");
     return NO;
 #endif
 }
@@ -252,8 +278,12 @@ static BOOL applyKeyboardToXServer(const char *layout,
 }
 static BOOL parseRcConfKeymap(const char **layout, const char **variant)
 {
+    KbdLog(@"    Path: /etc/rc.conf\n");
     FILE *rc_conf = fopen("/etc/rc.conf", "r");
-    if (!rc_conf) return NO;
+    if (!rc_conf) {
+        KbdLog(@"    ✗ file does not exist or cannot be read\n");
+        return NO;
+    }
     char line[256];
     BOOL found = NO;
     while (fgets(line, sizeof(line), rc_conf)) {
@@ -266,7 +296,7 @@ static BOOL parseRcConfKeymap(const char **layout, const char **variant)
             char *eq = strchr(keymap, '"');
             if (eq) *eq = '\0';
         }
-        NSLog(@"KeyboardManager: /etc/rc.conf keymap: %s", keymap);
+        KbdLog(@"    keymap=\"%s\"\n", keymap);
         if (strstr(keymap, "us"))       *layout = "us";
         else if (strstr(keymap, "de"))  *layout = "de";
         else if (strstr(keymap, "fr"))  *layout = "fr";
@@ -280,12 +310,16 @@ static BOOL parseRcConfKeymap(const char **layout, const char **variant)
             *variant = "dvorak";
         } else {
             *layout = "us";
-            NSLog(@"KeyboardManager: Unknown keymap '%s', using 'us'", keymap);
+            KbdLog(@"    (unknown keymap, defaulting to \"us\")\n");
         }
+        KbdLog(@"    → layout=\"%s\"", *layout);
+        if (*variant && (*variant)[0]) KbdLog(@" variant=\"%s\"", *variant);
+        KbdLog(@"\n");
         found = YES;
         break;
     }
     fclose(rc_conf);
+    if (!found) KbdLog(@"    ✗ no keymap= line found\n");
     return found;
 }
 static BOOL parseEtcDefaultKeyboard(const char **layout,
@@ -293,9 +327,13 @@ static BOOL parseEtcDefaultKeyboard(const char **layout,
                                     const char **options)
 {
 #if defined(__linux__)
+    KbdLog(@"    Path: /etc/default/keyboard\n");
     static char buf_layout[64], buf_variant[64], buf_options[256];
     FILE *fp = fopen("/etc/default/keyboard", "r");
-    if (!fp) return NO;
+    if (!fp) {
+        KbdLog(@"    ✗ file does not exist or cannot be read\n");
+        return NO;
+    }
     char line[256];
     BOOL found = NO;
     while (fgets(line, sizeof(line), fp)) {
@@ -317,14 +355,16 @@ static BOOL parseEtcDefaultKeyboard(const char **layout,
     }
     fclose(fp);
     if (found) {
-        NSLog(@"KeyboardManager: /etc/default/keyboard layout=%s variant=%s options=%s",
-              *layout ? *layout : "(null)",
-              *variant ? *variant : "(null)",
-              *options ? *options : "(null)");
+        KbdLog(@"    XKBLAYOUT=\"%s\"\n",   *layout  ? *layout  : "");
+        KbdLog(@"    XKBVARIANT=\"%s\"\n",  *variant ? *variant : "");
+        KbdLog(@"    XKBOPTIONS=\"%s\"\n",  *options ? *options : "");
+    } else {
+        KbdLog(@"    ✗ no XKB variables found in file\n");
     }
     return found;
 #else
     (void)layout; (void)variant; (void)options;
+    KbdLog(@"    ✗ only available on Linux\n");
     return NO;
 #endif
 }
@@ -376,7 +416,7 @@ static BOOL parseEFIVariable(const unsigned char *data, size_t len,
                              const char **options)
 {
     if (len <= 4) {
-        NSLog(@"KeyboardManager: EFI NVRAM: data too short (%zu bytes)", len);
+        KbdLog(@"    EFI data too short (%zu bytes)\n", len);
         return NO;
     }
     size_t dlen = len - 4;
@@ -395,21 +435,23 @@ static BOOL parseEFIVariable(const unsigned char *data, size_t len,
             str[slen++] = d[i];
     }
     str[slen] = '\0';
-    NSLog(@"KeyboardManager: EFI NVRAM raw value: '%s' (len=%zu)", str, slen);
+    KbdLog(@"    Raw EFI value: '%s' (len=%zu)\n", str, slen);
     char *colon = strchr(str, ':');
     if (!colon) {
-        NSLog(@"KeyboardManager: EFI NVRAM: no colon found in '%s'", str);
+        KbdLog(@"    ✗ no colon separator found in '%s'\n", str);
         return NO;
     }
     *colon = '\0';
+    KbdLog(@"    Locale: \"%s\"", str);
     *layout = efiLocaleToLayout(str);
     if (!*layout) {
-        NSLog(@"KeyboardManager: EFI NVRAM: locale '%s' not in map, fallback to 'us'", str);
+        KbdLog(@" (not in locale→layout map, fallback to \"us\")\n");
         *layout = "us";
+    } else {
+        KbdLog(@" → \"%s\"\n", *layout);
     }
     *variant = "";
     *options = "";
-    NSLog(@"KeyboardManager: EFI NVRAM locale '%s' -> layout '%s'", str, *layout);
     return YES;
 }
 static const char *findEfivar(void)
@@ -432,31 +474,33 @@ static BOOL detectKeyboardFromEFI(const char **layout,
 {
     unsigned char buf[512];
     size_t n;
+    KbdLog(@"    Trying efivarfs...\n");
     FILE *f = fopen("/sys/firmware/efi/efivars/prev-lang:kbd-7c436110-ab2a-4bbb-a880-fe41995c9f82", "rb");
     if (f) {
         n = fread(buf, 1, sizeof(buf), f);
         fclose(f);
-        NSLog(@"KeyboardManager: EFI NVRAM: read %zu bytes from efivarfs", n);
+        KbdLog(@"    efivarfs: read %zu bytes\n", n);
         if (parseEFIVariable(buf, n, layout, variant, options))
             return YES;
     } else {
-        NSLog(@"KeyboardManager: EFI NVRAM: efivarfs not available, trying efivar command");
+        KbdLog(@"    efivarfs: not available\n");
     }
+    KbdLog(@"    Trying efivar command...\n");
     const char *efivar = findEfivar();
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "%s -p -n 7c436110-ab2a-4bbb-a880-fe41995c9f82-prev-lang:kbd 2>/dev/null", efivar);
     f = popen(cmd, "r");
     if (!f) {
-        NSLog(@"KeyboardManager: EFI NVRAM: efivar command not available");
+        KbdLog(@"    efivar command: not available\n");
     } else {
         n = fread(buf, 1, sizeof(buf), f);
         int rc = pclose(f);
         if (rc == 0 && n > 0) {
-            NSLog(@"KeyboardManager: EFI NVRAM: read %zu bytes from efivar command", n);
+            KbdLog(@"    efivar command: read %zu bytes\n", n);
             if (parseEFIVariable(buf, n, layout, variant, options))
                 return YES;
         } else {
-            NSLog(@"KeyboardManager: EFI NVRAM: efivar command returned %d (%zu bytes)", rc, n);
+            KbdLog(@"    efivar command: returned %d (%zu bytes)\n", rc, n);
         }
     }
     return NO;
@@ -467,6 +511,7 @@ static BOOL detectKeyboardFromEFI(const char **layout,
 @synthesize options = _options;
 @synthesize model = _model;
 @synthesize lastError = _lastError;
+@synthesize detectionLog = _detectionLog;
 - (id)init
 {
     self = [super init];
@@ -486,6 +531,7 @@ static BOOL detectKeyboardFromEFI(const char **layout,
     [_options release];
     [_model release];
     [_lastError release];
+    [_detectionLog release];
     [super dealloc];
 }
 - (BOOL)detectKeyboardWithPasswd:(const struct passwd *)pwd
@@ -494,26 +540,66 @@ static BOOL detectKeyboardFromEFI(const char **layout,
     [_variant release];  _variant = nil;
     [_options release];  _options = nil;
     [_lastError release]; _lastError = nil;
+    [_detectionLog release]; _detectionLog = nil;
+
+    [s_log release];
+    s_log = [[NSMutableString alloc] init];
+    KbdLog(@"Keyboard Layout Detection Log\n");
+    KbdLog(@"==============================\n\n");
+
     const char *c_layout = NULL;
     const char *c_variant = NULL;
     const char *c_options = NULL;
+    BOOL found = NO;
+    int step = 0, successStep = 0;
+
+    step++;
+    KbdLog(@"[%d] /etc/default/keyboard\n", step);
     if (parseEtcDefaultKeyboard(&c_layout, &c_variant, &c_options)) {
-        NSLog(@"KeyboardManager: Keyboard source: /etc/default/keyboard");
-        goto done;
+        found = YES; successStep = step;
+        KbdLog(@"    → ACCEPTED (highest priority)\n\n");
+    } else {
+        KbdLog(@"    ✗ not found\n\n");
     }
-    if (detectKeyboardFromEFI(&c_layout, &c_variant, &c_options)) {
-        NSLog(@"KeyboardManager: Keyboard source: EFI NVRAM");
-        goto done;
+
+    step++;
+    KbdLog(@"[%d] EFI NVRAM (prev-lang:kbd)\n", step);
+    if (found) {
+        KbdLog(@"    - skipped (resolved at step %d)\n\n", successStep);
+    } else if (detectKeyboardFromEFI(&c_layout, &c_variant, &c_options)) {
+        found = YES; successStep = step;
+        KbdLog(@"    → ACCEPTED\n\n");
+    } else {
+        KbdLog(@"    ✗ not available\n\n");
     }
-    if (detectKeyboardFromUSB(&c_layout, &c_variant, &c_options)) {
-        NSLog(@"KeyboardManager: Keyboard source: USB RPI keyboard");
-        goto done;
+
+    step++;
+    KbdLog(@"[%d] USB RPI keyboard detection\n", step);
+    if (found) {
+        KbdLog(@"    - skipped (resolved at step %d)\n\n", successStep);
+    } else if (detectKeyboardFromUSB(&c_layout, &c_variant, &c_options)) {
+        found = YES; successStep = step;
+        KbdLog(@"    → ACCEPTED\n\n");
+    } else {
+        KbdLog(@"    ✗ no RPI keyboard found\n\n");
     }
-    if (!c_layout && detectKeyboardFromDeviceTree(&c_layout, &c_variant, &c_options)) {
-        NSLog(@"KeyboardManager: Keyboard source: RPI device-tree");
-        goto done;
+
+    step++;
+    KbdLog(@"[%d] RPI device-tree country-code\n", step);
+    if (found) {
+        KbdLog(@"    - skipped (resolved at step %d)\n\n", successStep);
+    } else if (!c_layout && detectKeyboardFromDeviceTree(&c_layout, &c_variant, &c_options)) {
+        found = YES; successStep = step;
+        KbdLog(@"    → ACCEPTED\n\n");
+    } else {
+        KbdLog(@"    ✗ not available\n\n");
     }
-    if (!c_layout && pwd) {
+
+    step++;
+    KbdLog(@"[%d] login.conf (BSD only)\n", step);
+    if (found) {
+        KbdLog(@"    - skipped (resolved at step %d)\n\n", successStep);
+    } else if (!c_layout && pwd) {
 #if !defined(__linux__)
         login_cap_t *lc = GW_LOGIN_GETPWCLASS((struct passwd *)pwd);
         if (lc) {
@@ -521,31 +607,75 @@ static BOOL detectKeyboardFromEFI(const char **layout,
             c_variant = login_getcapstr(lc, "keyboard.variant", NULL, NULL);
             c_options = login_getcapstr(lc, "keyboard.options", NULL, NULL);
             login_close(lc);
-            if (c_layout)
-                NSLog(@"KeyboardManager: Keyboard from login.conf: %s", c_layout);
+            if (c_layout) {
+                KbdLog(@"    keyboard.layout=\"%s\"\n", c_layout);
+                KbdLog(@"    → ACCEPTED\n\n");
+                found = YES; successStep = step;
+            } else {
+                KbdLog(@"    ✗ keyboard.* capabilities not set\n\n");
+            }
+        } else {
+            KbdLog(@"    ✗ login_getpwclass failed\n\n");
         }
 #else
         (void)pwd;
+        KbdLog(@"    ✗ not on BSD\n\n");
 #endif
+    } else if (!c_layout) {
+        KbdLog(@"    ✗ no passwd entry provided (pwd==NULL)\n\n");
+    } else {
+        KbdLog(@"    - skipped (resolved at step %d)\n\n", successStep);
     }
-    if (!c_layout) {
-        c_layout = getenv("XKB_DEFAULT_LAYOUT");
+
+    step++;
+    KbdLog(@"[%d] Environment variables\n", step);
+    if (found) {
+        KbdLog(@"    - skipped (resolved at step %d)\n\n", successStep);
+    } else {
+        const char *env_layout = getenv("XKB_DEFAULT_LAYOUT");
+        const char *env_variant = getenv("XKB_DEFAULT_VARIANT");
+        const char *env_options = getenv("XKB_DEFAULT_OPTIONS");
+        KbdLog(@"    XKB_DEFAULT_LAYOUT=%s\n", env_layout ? env_layout : "(unset)");
+        KbdLog(@"    XKB_DEFAULT_VARIANT=%s\n", env_variant ? env_variant : "(unset)");
+        KbdLog(@"    XKB_DEFAULT_OPTIONS=%s\n", env_options ? env_options : "(unset)");
+        if (!c_layout) { c_layout = env_layout; }
+        if (!c_variant) { c_variant = env_variant; }
+        if (!c_options) { c_options = env_options; }
+        if (c_layout) {
+            KbdLog(@"    → ACCEPTED\n\n");
+            found = YES; successStep = step;
+        } else {
+            KbdLog(@"    ✗ no layout set\n\n");
+        }
     }
-    if (!c_variant) {
-        c_variant = getenv("XKB_DEFAULT_VARIANT");
+
+    step++;
+    KbdLog(@"[%d] /etc/rc.conf keymap (BSD fallback)\n", step);
+    if (found) {
+        KbdLog(@"    - skipped (resolved at step %d)\n\n", successStep);
+    } else {
+        if (!c_layout && parseRcConfKeymap(&c_layout, &c_variant)) {
+            KbdLog(@"    → ACCEPTED\n\n");
+            found = YES; successStep = step;
+        } else {
+            KbdLog(@"    ✗ not found\n\n");
+        }
     }
-    if (!c_options) {
-        c_options = getenv("XKB_DEFAULT_OPTIONS");
-    }
-    if (!c_layout) {
-        NSLog(@"KeyboardManager: Checking /etc/rc.conf for keymap");
-        parseRcConfKeymap(&c_layout, &c_variant);
-    }
-done:
+
     if (!c_layout) {
         c_layout = "us";
-        NSLog(@"KeyboardManager: No keyboard detected from any source, defaulting to 'us'");
+        step++;
+        KbdLog(@"[%d] Default fallback\n", step);
+        KbdLog(@"    → layout=\"us\" (no source provided a layout)\n\n");
     }
+
+    KbdLog(@"==============================\n");
+    KbdLog(@"Final Result:\n");
+    KbdLog(@"  Layout:  %s\n", c_layout ? c_layout : "us");
+    KbdLog(@"  Variant: %s\n", (c_variant && c_variant[0]) ? c_variant : "(none)");
+    KbdLog(@"  Options: %s\n", (c_options && c_options[0]) ? c_options : "(none)");
+    KbdLog(@"  Model:   %@\n", _model);
+
     _layout    = [[NSString stringWithUTF8String:c_layout] copy];
     _variant   = (c_variant && c_variant[0])
                     ? [[NSString stringWithUTF8String:c_variant] copy]
@@ -553,8 +683,13 @@ done:
     _options   = (c_options && c_options[0])
                     ? [[NSString stringWithUTF8String:c_options] copy]
                     : [@"" copy];
-    NSLog(@"KeyboardManager: Keyboard layout: %@ variant=%@ options=%@",
-          _layout, _variant, _options);
+
+    _detectionLog = [s_log copy];
+    [s_log release];
+    s_log = nil;
+
+    NSLog(@"KeyboardManager: Keyboard: %@ variant=%@ options=%@ model=%@",
+          _layout, _variant, _options, _model);
     return YES;
 }
 - (BOOL)persistConfiguration
