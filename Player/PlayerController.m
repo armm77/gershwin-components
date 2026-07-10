@@ -3486,18 +3486,16 @@
         }
         [flowView updateTexturesForIndices:indices];
 
-        // Make the first station pending so the menu shows a checkmark immediately
+        // Pin the first station so the menu checkmark has a default
         RadioStation *firstStation = [[manager stations] objectAtIndex:0];
         if (_pendingRadioStation != firstStation) {
             [_pendingRadioStation release];
             _pendingRadioStation = [firstStation retain];
         }
-        // Force delegate call even if already at index 0
+        // Scroll flowView to the first item without triggering playback
         _suppressFlowSelection = YES;
         [flowView setSelectedIndex:0];
         _suppressFlowSelection = NO;
-        // Schedule playback of the first station
-        [self schedulePlayStation:firstStation];
 
         [previousButton setEnabled:(count > 1)];
         [nextButton setEnabled:(count > 1)];
