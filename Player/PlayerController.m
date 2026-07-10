@@ -33,6 +33,8 @@
     NSTextField *_modalInputField;
     VideoRenderView *_videoRenderView;
     BOOL _usingStreamPlayer;
+    BOOL _soundAlertShown;
+    BOOL _suppressFlowSelection;
 }
 - (void)restoreWindowTitle;
 - (void)handleDroppedFiles:(NSArray *)filePaths;
@@ -73,6 +75,11 @@
 // Overlay auto-hide delay (seconds)
 #define OVERLAY_HIDE_DELAY   3.0
 
+// Forward declaration for DropTargetView
+@interface PlayerController (MediaKeyHandler)
+- (BOOL)handleMediaKey:(unichar)c;
+@end
+
 #pragma mark - DropTargetView (drag-and-drop content view)
 
 @interface DropTargetView : NSView
@@ -83,6 +90,26 @@
 @end
 
 @implementation DropTargetView
+
+- (void)keyDown:(NSEvent *)event
+{
+    NSString *chars = [event charactersIgnoringModifiers];
+    if ([chars length] > 0) {
+        unichar c = [chars characterAtIndex:0];
+        NSUInteger flags = [event modifierFlags];
+        BOOL hasMod = (flags & (NSCommandKeyMask | NSControlKeyMask | NSAlternateKeyMask)) != 0;
+        if (!hasMod && (c == ' ' || c == NSLeftArrowFunctionKey
+                            || c == NSRightArrowFunctionKey
+                            || c == NSUpArrowFunctionKey
+                            || c == NSDownArrowFunctionKey
+                            || c == 'm' || c == 'M'))
+        {
+            if ([_controller handleMediaKey:c])
+                return;
+        }
+    }
+    [super keyDown:event];
+}
 
 - (instancetype)initWithFrame:(NSRect)frame controller:(PlayerController *)controller
 {
@@ -566,6 +593,9 @@
     NSMenuItem *stationSep = (NSMenuItem *)[NSMenuItem separatorItem];
     [stationSep setTag:9999];
     [radioMenu addItem:stationSep];
+
+    // Let validateMenuItem: set checkmark dynamically (needed by Eau's _recursiveMenuUpdate:)
+    [radioMenu setAutoenablesItems:YES];
 
     [radioMenuItem setSubmenu:radioMenu];
     [mainMenu addItem:radioMenuItem];
@@ -1340,6 +1370,17 @@
             [menuItem setTitle:correctTitle];
         }
     }
+    // Set checkmark on the currently playing (or pending) radio station
+    RadioStation *station = [menuItem representedObject];
+    if ([station isKindOfClass:[RadioStation class]]) {
+        RadioManager *rm = [RadioManager sharedManager];
+        NSString *currentName = [rm currentStationName] ?: [_pendingRadioStation name];
+        if (currentName && [[station name] isEqualToString:currentName]) {
+            [menuItem setState:NSOnState];
+        } else {
+            [menuItem setState:NSOffState];
+        }
+    }
     return YES;
 }
 
@@ -1684,14 +1725,17 @@
         if (!audioPlayer) {
             [progressIndicator setHidden:YES];
             [progressIndicator stopAnimation:self];
-            NSString *errMsg = error ? [error localizedDescription] : @"Unknown error";
-            NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:@"Failed to Load File"];
-            [alert setInformativeText:[NSString stringWithFormat:
-                @"Unable to play '%@': %@", [filePath lastPathComponent], errMsg]];
-            [alert setAlertStyle:NSWarningAlertStyle];
-            [alert runModal];
-            [alert release];
+            if (!_soundAlertShown) {
+                _soundAlertShown = YES;
+                NSString *errMsg = error ? [error localizedDescription] : @"Unknown error";
+                NSAlert *alert = [[NSAlert alloc] init];
+                [alert setMessageText:@"Failed to Load File"];
+                [alert setInformativeText:[NSString stringWithFormat:
+                    @"Unable to play '%@': %@", [filePath lastPathComponent], errMsg]];
+                [alert setAlertStyle:NSWarningAlertStyle];
+                [alert runModal];
+                [alert release];
+            }
             [self updateStatus:@"Failed to load file"];
             return;
         }
@@ -1738,6 +1782,121 @@
         [self loadFile:currentFilePath];
         [self play];
     }
+}
+
+- (BOOL)window:(NSWindow *)window performKeyEquivalent:(NSEvent *)event
+{
+    NSString *chars = [event charactersIgnoringModifiers];
+    if ([chars length] == 0) return NO;
+    unichar c = [chars characterAtIndex:0];
+    NSUInteger flags = [event modifierFlags];
+
+    BOOL isCmd = (flags & NSCommandKeyMask) != 0;
+    BOOL isCtrl = (flags & NSControlKeyMask) != 0;
+    BOOL isAlt = (flags & NSAlternateKeyMask) != 0;
+    BOOL hasMod = isCmd || isCtrl || isAlt;
+
+    // Don't intercept when a text input is first responder
+    NSResponder *first = [window firstResponder];
+    if (first && [first isKindOfClass:[NSTextField class]] && [(NSTextField *)first isEditable])
+        return NO;
+
+    if (c == ' ' && !hasMod) {
+        [self playPause:nil];
+        return YES;
+    }
+    if (c == NSLeftArrowFunctionKey && !hasMod) {
+        [self seekRelative:-5.0];
+        return YES;
+    }
+    if (c == NSRightArrowFunctionKey && !hasMod) {
+        [self seekRelative:5.0];
+        return YES;
+    }
+    if (c == NSUpArrowFunctionKey && !hasMod) {
+        [self adjustVolume:0.05];
+        return YES;
+    }
+    if (c == NSDownArrowFunctionKey && !hasMod) {
+        [self adjustVolume:-0.05];
+        return YES;
+    }
+    if ((c == 'm' || c == 'M') && !hasMod) {
+        [self toggleMute];
+        return YES;
+    }
+    return NO;
+}
+
+- (BOOL)handleMediaKey:(unichar)c
+{
+    // Don't intercept when a text input is first responder
+    NSResponder *first = [[self mainWindow] firstResponder];
+    if (first && [first isKindOfClass:[NSTextField class]] && [(NSTextField *)first isEditable])
+        return NO;
+
+    switch (c) {
+        case ' ': [self togglePlayPause]; return YES;
+        case NSLeftArrowFunctionKey: [self seekRelative:-5.0]; return YES;
+        case NSRightArrowFunctionKey: [self seekRelative:5.0]; return YES;
+        case NSUpArrowFunctionKey: [self adjustVolume:0.05]; return YES;
+        case NSDownArrowFunctionKey: [self adjustVolume:-0.05]; return YES;
+        case 'm': case 'M': [self toggleMute]; return YES;
+        default: return NO;
+    }
+}
+
+- (void)seekRelative:(NSTimeInterval)delta
+{
+    if (!avPlayer && !audioPlayer) return;
+
+    if (avPlayer) {
+        AVAsset *asset = [playerItem asset];
+        CMTime dur = [asset duration];
+        double durSec = CMTimeGetSeconds(dur);
+        if (durSec <= 0) return;
+        CMTime cur = [avPlayer currentTime];
+        double curSec = CMTimeGetSeconds(cur);
+        double newSec = fmax(0, fmin(durSec, curSec + delta));
+        CMTime seekTo = CMTimeMakeWithSeconds(newSec, 1);
+        [avPlayer seekToTime:seekTo];
+    } else if (audioPlayer) {
+        NSSound *sound = [audioPlayer valueForKey:@"sound"];
+        if (sound && [sound respondsToSelector:@selector(currentTime)]
+                 && [sound respondsToSelector:@selector(setCurrentTime:)]
+                 && [sound respondsToSelector:@selector(duration)]) {
+            NSTimeInterval cur = [sound currentTime];
+            NSTimeInterval dur = [sound duration];
+            if (dur <= 0) return;
+            NSTimeInterval newTime = fmax(0, fmin(dur, cur + delta));
+            [sound setCurrentTime:newTime];
+        }
+    }
+}
+
+- (void)adjustVolume:(float)delta
+{
+    if (playerMode == PlayerModeRadio) {
+        float vol = [volumeSlider floatValue] + delta;
+        vol = fmax(0.0f, fmin(1.0f, vol));
+        [volumeSlider setFloatValue:vol];
+        [self radioVolumeChanged:nil];
+    } else {
+        float vol = localVolume + delta;
+        vol = fmax(0.0f, fmin(1.0f, vol));
+        localVolume = vol;
+        [volumeSlider setFloatValue:vol];
+        if (audioPlayer) {
+            [audioPlayer setVolume:vol];
+        }
+    }
+}
+
+- (void)toggleMute
+{
+    BOOL isMuted = ([muteCheckbox state] == NSOnState);
+    [muteCheckbox setState:isMuted ? NSOffState : NSOnState];
+    [self radioMuteToggled:nil];
 }
 
 - (void)play
@@ -1787,7 +1946,27 @@
                                                                  repeats:YES] retain];
             }
         } else {
-            NSLog(@"Player: AVAudioPlayer play returned NO, audio may be silent");
+            NSLog(@"Player: AVAudioPlayer play returned NO, attempting reload");
+            // AVAudioPlayer may fail to resume after pause; reload the file
+            if (currentFilePath) {
+                [self loadFile:currentFilePath];
+                if (audioPlayer) {
+                    result = [audioPlayer play];
+                    if (result) {
+                        playbackState = PlayerPlaybackStatePlaying;
+                        [playButton setImage:[self iconPause]];
+                    }
+                }
+            }
+            if (!result && !_soundAlertShown) {
+                _soundAlertShown = YES;
+                NSAlert *alert = [[NSAlert alloc] init];
+                [alert setMessageText:@"Playback Failed"];
+                [alert setInformativeText:@"Could not open the audio device. Check that your system sound configuration is working."];
+                [alert setAlertStyle:NSWarningAlertStyle];
+                [alert runModal];
+                [alert release];
+            }
         }
     }
 }
@@ -1817,9 +1996,17 @@
     if (avPlayer) {
         [avPlayer pause];
         [avPlayer seekToTime:kCMTimeZero];
+        [avPlayer release];
+        avPlayer = nil;
+    }
+    if (playerItem) {
+        [playerItem release];
+        playerItem = nil;
     }
     if (audioPlayer) {
         [audioPlayer stop];
+        [audioPlayer release];
+        audioPlayer = nil;
     }
     // Stop FFmpeg stream player (handles both audio and video streaming)
     [[StreamPlayer sharedPlayer] stop];
@@ -1944,6 +2131,7 @@
 
 - (void)itemFlowView:(ItemFlowView *)view didSelectItemAtIndex:(NSUInteger)index
 {
+    if (_suppressFlowSelection) return;
     if (playerMode == PlayerModeRadio) {
         NSArray *stations = [[RadioManager sharedManager] stations];
         if (index >= [stations count]) return;
@@ -3298,7 +3486,19 @@
         }
         [flowView updateTexturesForIndices:indices];
 
+        // Make the first station pending so the menu shows a checkmark immediately
+        RadioStation *firstStation = [[manager stations] objectAtIndex:0];
+        if (_pendingRadioStation != firstStation) {
+            [_pendingRadioStation release];
+            _pendingRadioStation = [firstStation retain];
+        }
+        // Force delegate call even if already at index 0
+        _suppressFlowSelection = YES;
         [flowView setSelectedIndex:0];
+        _suppressFlowSelection = NO;
+        // Schedule playback of the first station
+        [self schedulePlayStation:firstStation];
+
         [previousButton setEnabled:(count > 1)];
         [nextButton setEnabled:(count > 1)];
     }
@@ -3313,11 +3513,20 @@
     if (station) {
         [statusLabel setStringValue:[NSString stringWithFormat:@"Now Playing: %@", [station name]]];
         [mainWindow setTitle:[NSString stringWithFormat:@"Player - %@", [station name]]];
+        // Keep the flow view in sync
+        NSArray *stations = [manager stations];
+        NSUInteger idx = [stations indexOfObject:station];
+        if (idx != NSNotFound) {
+            _suppressFlowSelection = YES;
+            [flowView setSelectedIndex:idx];
+            _suppressFlowSelection = NO;
+        }
     } else {
         [statusLabel setStringValue:@"Now Playing"];
         [mainWindow setTitle:@"Player - Internet Radio"];
     }
     [stopButton setEnabled:YES];
+    [self rebuildRadioStationMenu];
 }
 
 - (void)radioManagerDidStop:(RadioManager *)manager
@@ -3392,13 +3601,15 @@
         [radioMenu removeItemAtIndex:[radioMenu numberOfItems] - 1];
     }
 
-    // Add sentinel separator (tagged so validateMenuItem: can identify it)
+    // Add sentinel separator
     NSMenuItem *stationSep = (NSMenuItem *)[NSMenuItem separatorItem];
     [stationSep setTag:9999];
     [radioMenu addItem:stationSep];
 
     // Add station items
-    NSArray *stations = [[RadioManager sharedManager] stations];
+    RadioManager *rm = [RadioManager sharedManager];
+    NSString *currentName = [rm currentStationName] ?: [_pendingRadioStation name];
+    NSArray *stations = [rm stations];
     for (NSUInteger si = 0; si < [stations count]; si++) {
         RadioStation *station = [stations objectAtIndex:si];
         NSString *name = [station name] ?: @"Unknown Station";
@@ -3406,7 +3617,10 @@
                                                        action:@selector(radioSelectStationFromMenu:)
                                                 keyEquivalent:@""];
         [sItem setTarget:self];
-        [sItem setTag:(NSInteger)si];
+        [sItem setRepresentedObject:station];
+        if (currentName && [[station name] isEqualToString:currentName]) {
+            [sItem setState:NSOnState];
+        }
         [radioMenu addItem:sItem];
         [sItem release];
     }
@@ -3414,17 +3628,25 @@
 
 - (void)radioSelectStationFromMenu:(id)sender
 {
-    NSInteger index = [sender tag];
-    NSArray *stations = [[RadioManager sharedManager] stations];
-    if (index < 0 || index >= (NSInteger)[stations count]) return;
+    RadioStation *station = [sender representedObject];
+    if (!station) return;
 
-    // Enter radio mode if not already
+    // Ensure we're in radio mode
     if (playerMode != PlayerModeRadio) {
         [self enterRadioMode];
     }
 
-    // Select in flow view — didSelectItemAtIndex: will schedule playback via debounce
-    [flowView setSelectedIndex:(NSUInteger)index];
+    // Scroll the flow view to match, but don't trigger selection delegate
+    _suppressFlowSelection = YES;
+    NSArray *stations = [[RadioManager sharedManager] stations];
+    NSUInteger idx = [stations indexOfObject:station];
+    if (idx != NSNotFound) {
+        [flowView setSelectedIndex:idx];
+    }
+    _suppressFlowSelection = NO;
+
+    // Play the station
+    [self schedulePlayStation:station];
 }
 
 #pragma mark - Radio Mode: URL History
