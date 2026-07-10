@@ -133,35 +133,31 @@ int loginwindow_pam_conv(int num_msg, const struct pam_message **msg,
     
     BOOL passwordProvided = (_storedPassword && [_storedPassword length] > 0);
     
+    // Determine if the account is passwordless (no password set).
+    // pam_unix.so nullok would accept ANY password for such accounts,
+    // so we reject non-empty passwords here and skip the verify step
+    // for empty ones to avoid the nullok pitfall.
+    BOOL accountIsPasswordless = NO;
 #if defined(__linux__)
-    // Workaround for pam_unix.so nullok: when the account has no password
-    // set, nullok accepts ANY password instead of only the empty string.
-    // Reject non-empty passwords here before PAM sees them.
-    if (passwordProvided) {
-        struct spwd *sp = getspnam([username UTF8String]);
-        if (sp && sp->sp_pwdp && sp->sp_pwdp[0] == '\0') {
-            NSDebugLLog(@"gwcomp", @"[PAM] Account has no password; rejecting non-empty password");
-            [_lastErrorMessage release];
-            _lastErrorMessage = [@"Authentication failure" retain];
-            [_storedPassword release];
-            _storedPassword = nil;
-            authenticationInProgress = NO;
-            return NO;
-        }
-        // No shadow entry — also reject non-empty passwords, as
-        // pam_unix.so nullok would accept any password for such
-        // accounts (e.g. user with * in passwd but no shadow).
-        if (!sp) {
-            NSDebugLLog(@"gwcomp", @"[PAM] No shadow entry; rejecting non-empty password");
-            [_lastErrorMessage release];
-            _lastErrorMessage = [@"Authentication failure" retain];
-            [_storedPassword release];
-            _storedPassword = nil;
-            authenticationInProgress = NO;
-            return NO;
-        }
+    struct spwd *sp = getspnam([username UTF8String]);
+    if (sp && sp->sp_pwdp && sp->sp_pwdp[0] == '\0') {
+        accountIsPasswordless = YES;
+    } else if (!sp) {
+        // No shadow entry (e.g. user has * in passwd but no shadow).
+        // Without a shadow entry PAM has no hash to verify against,
+        // so nullok accepts any password — treat as passwordless.
+        accountIsPasswordless = YES;
     }
 #endif
+    if (accountIsPasswordless && passwordProvided) {
+        NSDebugLLog(@"gwcomp", @"[PAM] Account has no password; rejecting non-empty password");
+        [_lastErrorMessage release];
+        _lastErrorMessage = [@"Authentication failure" retain];
+        [_storedPassword release];
+        _storedPassword = nil;
+        authenticationInProgress = NO;
+        return NO;
+    }
     
     // Use standard "login" PAM service
     NSDebugLLog(@"gwcomp", @"[PAM] Calling pam_start with service='login', user='%s'", [username UTF8String]);
@@ -190,7 +186,7 @@ int loginwindow_pam_conv(int num_msg, const struct pam_message **msg,
     } else {
         NSDebugLLog(@"gwcomp", @"[PAM] gethostname failed");
     }
-    if (passwordProvided) {
+    if (passwordProvided || !accountIsPasswordless) {
         result = pam_authenticate(pam_handle, 0);
         NSDebugLLog(@"gwcomp", @"[PAM] pam_authenticate result: %d (%s)", result, pam_strerror(pam_handle, result));
         if (result != PAM_SUCCESS) {
@@ -206,7 +202,7 @@ int loginwindow_pam_conv(int num_msg, const struct pam_message **msg,
             return NO;
         }
     } else {
-        NSDebugLLog(@"gwcomp", @"[PAM] Empty password — skipping pam_authenticate");
+        NSDebugLLog(@"gwcomp", @"[PAM] Passwordless account with empty password — skipping pam_authenticate");
     }
     result = pam_acct_mgmt(pam_handle, PAM_SILENT);
     NSDebugLLog(@"gwcomp", @"[PAM] pam_acct_mgmt result: %d (%s)", result, pam_strerror(pam_handle, result));
