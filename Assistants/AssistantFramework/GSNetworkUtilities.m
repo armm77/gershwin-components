@@ -11,6 +11,10 @@
 //
 
 #import "GSNetworkUtilities.h"
+#import <netdb.h>
+#import <sys/socket.h>
+#import <sys/time.h>
+#import <fcntl.h>
 
 @implementation GSDownloader
 
@@ -335,36 +339,61 @@
 
 + (BOOL)checkInternetConnectivity
 {
-    return [self checkInternetConnectivityToHost:@"8.8.8.8" port:53 timeout:3];
+    return [self checkInternetConnectivityWithTimeout:5];
 }
 
-+ (BOOL)checkInternetConnectivityToHost:(NSString *)host port:(int)port timeout:(int)timeout
++ (BOOL)checkInternetConnectivityWithTimeout:(int)timeout
 {
-    NSDebugLLog(@"gwcomp", @"GSNetworkUtilities: checkInternetConnectivity to %@:%d", host, port);
+    NSDebugLLog(@"gwcomp", @"GSNetworkUtilities: checkInternetConnectivity timeout=%d", timeout);
     
-    // Use a simple command-line approach for internet checking
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:@"/usr/bin/timeout"];
-    [task setArguments:@[[NSString stringWithFormat:@"%d", timeout], @"ping", @"-c", @"1", host]];
+    // Use BSD sockets to establish a TCP connection.
+    // Portable across all Unix-like platforms, no external tools needed,
+    // no NSURLConnection/GNUstep runloop dependency, no SSL issues.
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
     
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-    [task setStandardError:pipe];
+    int gai = getaddrinfo("github.com", "443", &hints, &res);
+    if (gai != 0 || !res) {
+        NSDebugLLog(@"gwcomp", @"GSNetworkUtilities: getaddrinfo failed: %s", gai_strerror(gai));
+        return NO;
+    }
     
     BOOL connected = NO;
-    
-    @try {
-        [task launch];
-        [task waitUntilExit];
+    for (struct addrinfo *p = res; p; p = p->ai_next) {
+        int fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (fd < 0) continue;
         
-        int exitStatus = [task terminationStatus];
-        connected = (exitStatus == 0);
-    }
-    @catch (NSException *exception) {
-        NSDebugLLog(@"gwcomp", @"GSNetworkUtilities: Error checking internet connection: %@", [exception reason]);
-        connected = NO;
+        // Non-blocking connect so we can timeout with select
+        int flags = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        
+        (void)connect(fd, p->ai_addr, p->ai_addrlen);
+        
+        struct timeval tv;
+        tv.tv_sec = timeout;
+        tv.tv_usec = 0;
+        
+        fd_set wset;
+        FD_ZERO(&wset);
+        FD_SET(fd, &wset);
+        
+        int rc = select(fd + 1, NULL, &wset, NULL, &tv);
+        if (rc > 0) {
+            int err = 0;
+            socklen_t elen = sizeof err;
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen);
+            if (err == 0) {
+                connected = YES;
+            }
+        }
+        
+        close(fd);
+        if (connected) break;
     }
     
+    freeaddrinfo(res);
     NSDebugLLog(@"gwcomp", @"GSNetworkUtilities: Internet connection check result: %d", connected);
     return connected;
 }

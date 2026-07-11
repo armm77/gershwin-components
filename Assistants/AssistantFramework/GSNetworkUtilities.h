@@ -54,7 +54,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface GSNetworkUtilities : NSObject
 
 + (BOOL)checkInternetConnectivity;
-+ (BOOL)checkInternetConnectivityToHost:(NSString *)host port:(int)port timeout:(int)timeout;
++ (BOOL)checkInternetConnectivityWithTimeout:(int)timeout;
 
 @end
 
