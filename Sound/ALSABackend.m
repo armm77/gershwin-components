@@ -1860,69 +1860,111 @@ static NSString *const kMicControl = @"Mic";
     if (defaultOutput != nil) return;
 
     NSString *asoundrc = [NSString stringWithContentsOfFile:asoundrcPath
-                                                  encoding:NSUTF8StringEncoding
-                                                     error:NULL];
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:NULL];
     if (!asoundrc) return;
 
-    // Within the pcm.!default block, find the slave pcm line which has:
-    //   pcm "hw:CardID,Device"   (card name or numeric index)
-    NSRange pcmBlock = [asoundrc rangeOfString:@"pcm.!default"];
-    if (pcmBlock.location == NSNotFound) return;
+    // Helper: match a card reference (name or numeric) against cached devices
+    AudioDevice * (^matchCardRef)(NSString *, int) = ^(NSString *cardPart, int devIndex) {
+        // Try as card name (string ID) first
+        for (AudioDevice *dev in cachedOutputDevices) {
+            NSString *cid = [self cardIDForCardIndex:dev.cardIndex];
+            if ([cid isEqualToString:cardPart] && dev.deviceIndex == devIndex) {
+                return dev;
+            }
+        }
+        // Fall back to numeric card index
+        int cardNum = [cardPart intValue];
+        for (AudioDevice *dev in cachedOutputDevices) {
+            if (dev.cardIndex == cardNum && dev.deviceIndex == devIndex) {
+                return dev;
+            }
+        }
+        return (AudioDevice *)nil;
+    };
 
-    NSString *block = [asoundrc substringFromIndex:pcmBlock.location];
-    NSRange closeBrace = [block rangeOfString:@"}"];
-    if (closeBrace.location != NSNotFound) {
-        block = [block substringToIndex:closeBrace.location];
-    }
-
-    // Scan for pcm "hw:..." inside the block — this is what
-    // buildAsoundrcContent writes and it handles both formats:
-    //   pcm "hw:Audio,0"   (card name, stable)
-    //   pcm "hw:0,0"       (numeric index, legacy)
-    NSScanner *scanner = [NSScanner scannerWithString:block];
-    [scanner scanUpToString:@"pcm \"hw:" intoString:NULL];
-    if ([scanner scanString:@"pcm \"hw:" intoString:NULL]) {
-        NSString *cardRef = nil;
-        [scanner scanUpToString:@"\"" intoString:&cardRef];
-        if (cardRef) {
-            // cardRef is "Audio,0" or "0,0" or "Audio"
-            NSArray *parts = [cardRef componentsSeparatedByString:@","];
-            NSString *cardPart = [parts count] > 0 ? [parts objectAtIndex:0] : nil;
-            int devIndex = ([parts count] >= 2) ? [[parts objectAtIndex:1] intValue] : 0;
-
-            if (cardPart) {
-                // Try as card name (string ID) first — handles "Audio", "vc4hdmi0"
-                AudioDevice *match = nil;
-                for (AudioDevice *dev in cachedOutputDevices) {
-                    NSString *cid = [self cardIDForCardIndex:dev.cardIndex];
-                    if ([cid isEqualToString:cardPart] && dev.deviceIndex == devIndex) {
-                        match = dev;
-                        break;
-                    }
+    // ---- Try new format: pcm.dmix_<suffix> block with nested hw card/device ----
+    //   pcm.dmix_EarPods_0 {
+    //       slave { pcm { type hw card 1 device 0 } }
+    //   }
+    NSRange dmixRange = [asoundrc rangeOfString:@"pcm.dmix_"];
+    if (dmixRange.location != NSNotFound) {
+        NSString *afterDmix = [asoundrc substringFromIndex:dmixRange.location];
+        // Find opening brace of the dmix block
+        NSRange braceRange = [afterDmix rangeOfString:@"{"];
+        if (braceRange.location != NSNotFound) {
+            NSString *dmixBody = [afterDmix substringFromIndex:braceRange.location];
+            // Find closing brace
+            NSRange closeBrace = [dmixBody rangeOfString:@"}"];
+            if (closeBrace.location != NSNotFound) {
+                dmixBody = [dmixBody substringToIndex:closeBrace.location];
+            }
+            // Scan for "card <N>" inside the slave block
+            NSScanner *s = [NSScanner scannerWithString:dmixBody];
+            // Look for "card" and "device" after "slave { pcm {"
+            NSRange slavePcm = [dmixBody rangeOfString:@"slave"];
+            if (slavePcm.location != NSNotFound) {
+                NSString *slavePart = [dmixBody substringFromIndex:slavePcm.location];
+                int foundCard = -1, foundDev = -1;
+                s = [NSScanner scannerWithString:slavePart];
+                [s scanUpToString:@"card" intoString:NULL];
+                if ([s scanString:@"card" intoString:NULL]) {
+                    [s scanInt:&foundCard];
                 }
-                // Fall back to numeric card index — handles "0", "1"
-                if (!match) {
-                    int cardNum = [cardPart intValue];
+                // Reset scanner for device
+                s = [NSScanner scannerWithString:slavePart];
+                [s scanUpToString:@"device" intoString:NULL];
+                if ([s scanString:@"device" intoString:NULL]) {
+                    [s scanInt:&foundDev];
+                }
+                if (foundCard >= 0 && foundDev >= 0) {
                     for (AudioDevice *dev in cachedOutputDevices) {
-                        if (dev.cardIndex == cardNum && dev.deviceIndex == devIndex) {
-                            match = dev;
-                            break;
+                        if (dev.cardIndex == foundCard && dev.deviceIndex == foundDev) {
+                            dev.isDefault = YES;
+                            defaultOutput = [dev retain];
+                            currentOutputCard = dev.cardIndex;
+                            return;
                         }
                     }
-                }
-                if (match) {
-                    match.isDefault = YES;
-                    defaultOutput = [match retain];
-                    currentOutputCard = match.cardIndex;
-                    return;
                 }
             }
         }
     }
 
-    // Legacy fallback: look for "card N" inside the pcm block or ctl block
-    // (handles hand-written asoundrc where the card line is inside the block)
-    for (NSString *line in [block componentsSeparatedByString:@"\n"]) {
+    // ---- Old format: pcm.!default with pcm "hw:..." ----
+    NSRange pcmBlock = [asoundrc rangeOfString:@"pcm.!default"];
+    if (pcmBlock.location != NSNotFound) {
+        NSString *block = [asoundrc substringFromIndex:pcmBlock.location];
+        NSRange closeBrace = [block rangeOfString:@"}"];
+        if (closeBrace.location != NSNotFound) {
+            block = [block substringToIndex:closeBrace.location];
+        }
+
+        NSScanner *scanner = [NSScanner scannerWithString:block];
+        [scanner scanUpToString:@"pcm \"hw:" intoString:NULL];
+        if ([scanner scanString:@"pcm \"hw:" intoString:NULL]) {
+            NSString *cardRef = nil;
+            [scanner scanUpToString:@"\"" intoString:&cardRef];
+            if (cardRef) {
+                NSArray *parts = [cardRef componentsSeparatedByString:@","];
+                NSString *cardPart = [parts count] > 0 ? [parts objectAtIndex:0] : nil;
+                int devIndex = ([parts count] >= 2) ? [[parts objectAtIndex:1] intValue] : 0;
+                if (cardPart) {
+                    AudioDevice *match = matchCardRef(cardPart, devIndex);
+                    if (match) {
+                        match.isDefault = YES;
+                        defaultOutput = [match retain];
+                        currentOutputCard = match.cardIndex;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Fallback: look for "card <name/index>" in ctl block or dmix block ----
+    // Scan the whole file for "card <name>" or "card <N>"
+    for (NSString *line in [asoundrc componentsSeparatedByString:@"\n"]) {
         NSString *trimmed = [line stringByTrimmingCharactersInSet:
                              [NSCharacterSet whitespaceCharacterSet]];
         if (![trimmed hasPrefix:@"card"] && ![trimmed hasPrefix:@"Card"]) continue;
@@ -2132,6 +2174,205 @@ static NSString *const kMicControl = @"Mic";
     return [prefs writeToFile:defaultsFilePath atomically:YES];
 }
 
+#pragma mark - Device Capability Probing
+
+- (NSDictionary *)parseStream0ForCard:(int)cardIndex
+{
+    NSString *path = [NSString stringWithFormat:@"/proc/asound/card%d/stream0", cardIndex];
+    NSString *content = [NSString stringWithContentsOfFile:path
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:NULL];
+    if (!content) return nil;
+
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    NSString *currentSection = nil;
+
+    for (NSString *line in [content componentsSeparatedByString:@"\n"]) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+                             [NSCharacterSet whitespaceCharacterSet]];
+
+        if ([trimmed hasPrefix:@"Playback:"]) {
+            currentSection = @"playback";
+            continue;
+        } else if ([trimmed hasPrefix:@"Capture:"]) {
+            currentSection = @"capture";
+            continue;
+        }
+
+        if (!currentSection) continue;
+
+        // Parse "Channels: N"
+        if ([trimmed hasPrefix:@"Channels:"]) {
+            NSScanner *scanner = [NSScanner scannerWithString:trimmed];
+            [scanner scanString:@"Channels:" intoString:NULL];
+            int ch = 0;
+            [scanner scanInt:&ch];
+            [result setObject:@(ch) forKey:[NSString stringWithFormat:@"%@_channels", currentSection]];
+            continue;
+        }
+
+        // Parse "Rates: N - N"
+        if ([trimmed hasPrefix:@"Rates:"]) {
+            NSScanner *scanner = [NSScanner scannerWithString:trimmed];
+            [scanner scanString:@"Rates:" intoString:NULL];
+            int rateMin = 0, rateMax = 0;
+            [scanner scanInt:&rateMin];
+            [scanner scanString:@"-" intoString:NULL];
+            [scanner scanInt:&rateMax];
+            if (rateMax > 0) {
+                [result setObject:@(rateMax) forKey:[NSString stringWithFormat:@"%@_rate", currentSection]];
+            } else if (rateMin > 0) {
+                [result setObject:@(rateMin) forKey:[NSString stringWithFormat:@"%@_rate", currentSection]];
+            }
+            continue;
+        }
+
+        // Parse "Format: FMT1 FMT2"
+        if ([trimmed hasPrefix:@"Format:"]) {
+            NSString *fmtStr = [trimmed substringFromIndex:7];
+            fmtStr = [fmtStr stringByTrimmingCharactersInSet:
+                      [NSCharacterSet whitespaceCharacterSet]];
+            NSArray *formats = [fmtStr componentsSeparatedByCharactersInSet:
+                                [NSCharacterSet whitespaceCharacterSet]];
+            NSMutableArray *clean = [NSMutableArray array];
+            for (NSString *f in formats) {
+                if ([f length] > 0) [clean addObject:f];
+            }
+            if ([clean count] > 0) {
+                [result setObject:clean forKey:[NSString stringWithFormat:@"%@_formats", currentSection]];
+            }
+        }
+    }
+
+    return result;
+}
+
+- (NSDictionary *)dumpHWParamsForCard:(int)cardIndex
+                              device:(int)deviceIndex
+                              stream:(NSString *)stream
+{
+    NSString *devStr = [NSString stringWithFormat:@"hw:%d,%d", cardIndex, deviceIndex];
+    NSString *tool = [stream isEqualToString:@"capture"] ? arecordPath : aplayPath;
+    if (!tool) return nil;
+
+    // Use S16_LE and a moderate channel count to probe hardware constraints.
+    // The channel count depends on direction:
+    int probeChannels = [stream isEqualToString:@"capture"] ? 1 : 2;
+
+    NSArray *args = @[@"--dump-hw-params", @"-D", devStr,
+                      @"-f", @"S16_LE", @"-r", @"48000",
+                      @"-c", [NSString stringWithFormat:@"%d", probeChannels],
+                      @"/dev/null", @"-d", @"1"];
+    NSString *output = [self runCommandCaptureError:tool withArguments:args];
+    if (!output) return nil;
+
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    for (NSString *line in [output componentsSeparatedByString:@"\n"]) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+                             [NSCharacterSet whitespaceCharacterSet]];
+
+        // PERIOD_SIZE: [min max]
+        if ([trimmed hasPrefix:@"PERIOD_SIZE:"]) {
+            NSString *range = [trimmed substringFromIndex:12];
+            range = [range stringByTrimmingCharactersInSet:
+                     [NSCharacterSet whitespaceCharacterSet]];
+            // Strip brackets
+            range = [range stringByReplacingOccurrencesOfString:@"[" withString:@""];
+            range = [range stringByReplacingOccurrencesOfString:@"]" withString:@""];
+            NSArray *parts = [range componentsSeparatedByString:@" "];
+            if ([parts count] >= 2) {
+                [result setObject:@([[parts objectAtIndex:0] intValue])
+                          forKey:@"period_size_min"];
+                [result setObject:@([[parts objectAtIndex:1] intValue])
+                          forKey:@"period_size_max"];
+            }
+            continue;
+        }
+
+        // BUFFER_SIZE: [min max]
+        if ([trimmed hasPrefix:@"BUFFER_SIZE:"]) {
+            NSString *range = [trimmed substringFromIndex:12];
+            range = [range stringByTrimmingCharactersInSet:
+                     [NSCharacterSet whitespaceCharacterSet]];
+            range = [range stringByReplacingOccurrencesOfString:@"[" withString:@""];
+            range = [range stringByReplacingOccurrencesOfString:@"]" withString:@""];
+            NSArray *parts = [range componentsSeparatedByString:@" "];
+            if ([parts count] >= 2) {
+                [result setObject:@([[parts objectAtIndex:0] intValue])
+                          forKey:@"buffer_size_min"];
+                [result setObject:@([[parts objectAtIndex:1] intValue])
+                          forKey:@"buffer_size_max"];
+            }
+            continue;
+        }
+
+        // PERIODS: [min max]
+        if ([trimmed hasPrefix:@"PERIODS:"]) {
+            NSString *range = [trimmed substringFromIndex:8];
+            range = [range stringByTrimmingCharactersInSet:
+                     [NSCharacterSet whitespaceCharacterSet]];
+            range = [range stringByReplacingOccurrencesOfString:@"[" withString:@""];
+            range = [range stringByReplacingOccurrencesOfString:@"]" withString:@""];
+            NSArray *parts = [range componentsSeparatedByString:@" "];
+            if ([parts count] >= 2) {
+                [result setObject:@([[parts objectAtIndex:0] intValue])
+                          forKey:@"periods_min"];
+                [result setObject:@([[parts objectAtIndex:1] intValue])
+                          forKey:@"periods_max"];
+            }
+        }
+    }
+
+    return result;
+}
+
+- (NSString *)preferredFormatFromFormats:(NSArray *)formats
+{
+    // Priority: S24_3LE > S32_LE > S24_LE > S16_LE
+    static NSArray *priority = nil;
+    if (!priority) {
+        priority = [[NSArray alloc] initWithObjects:
+                    @"S24_3LE", @"S32_LE", @"S24_LE", @"S16_LE", nil];
+    }
+    for (NSString *fmt in priority) {
+        if ([formats containsObject:fmt]) return fmt;
+    }
+    return @"S16_LE";
+}
+
+- (int)ipcKeyForCard:(int)cardIndex device:(int)deviceIndex
+{
+    // Deterministic unique key per card+device.
+    // Range: 1024..~10000 (safe within dmix ipc_key range)
+    return 1024 + cardIndex * 100 + deviceIndex * 10;
+}
+
+- (int)suggestedPeriodSizeFromMin:(int)min max:(int)max
+{
+    // Clamp 1024 to hardware limits, rounding to nearest power of 2 if needed.
+    // Target: 1024 is a good balance of latency and throughput.
+    if (1024 >= min && 1024 <= max) return 1024;
+    if (1024 < min) {
+        // Find next power of 2 >= min
+        int v = 1;
+        while (v < min) v <<= 1;
+        return (v <= max) ? v : max;
+    }
+    // 1024 > max, use max
+    return max;
+}
+
+- (int)suggestedBufferSizeFromMin:(int)min max:(int)max
+{
+    // Target: period_size * 4, clamped to hardware limits.
+    // We don't know period_size here, so just return a sensible default
+    // that's at least 4x the typical period. The caller adjusts.
+    int target = 4096;
+    if (target >= min && target <= max) return target;
+    if (target < min) return min;
+    return max;
+}
+
 - (NSString *)buildAsoundrcContent
 {
     NSMutableString *content = [NSMutableString string];
@@ -2139,30 +2380,157 @@ static NSString *const kMicControl = @"Mic";
     [content appendString:@"# ALSA configuration\n"];
     [content appendString:@"# Generated by Sound Preferences\n\n"];
 
-    if (defaultOutput) {
-        // Use type plug (not type hw) so applications that open the ALSA
-        // default device (libao, NSSound, aplay -D default, etc.) get
-        // automatic format/rate/channel conversion.  type hw requires
-        // exact format match and opens the device exclusively, which
-        // causes ao_open_live() — used by AudioOutputSink in NSSound —
-        // to return NULL silently when the format doesn't match exactly.
-        //
-        // Use the stable card ID (a string name) instead of a numeric
-        // card index so the configuration survives hardware reordering.
-        NSString *cardId = [self cardIDForCardIndex:defaultOutput.cardIndex];
-        if (!cardId) cardId = [NSString stringWithFormat:@"%d", defaultOutput.cardIndex];
+    // Determine which devices to configure.
+    // Use the same card for both if they match; otherwise separate.
+    AudioDevice *outDev = defaultOutput;
+    AudioDevice *inDev  = defaultInput;
 
-        [content appendFormat:@"pcm.!default {\n"];
-        [content appendFormat:@"    type plug\n"];
-        [content appendFormat:@"    slave {\n"];
-        [content appendFormat:@"        pcm \"hw:%@,%d\"\n", cardId, defaultOutput.deviceIndex];
-        [content appendFormat:@"    }\n"];
-        [content appendFormat:@"}\n\n"];
+    // Helper: get PCM suffix (stable CardID_DeviceIndex) for naming
+    // our custom pcm blocks (dmix_<suffix>, <suffix>_cap, etc.)
+    NSString *(^pcmSuffix)(AudioDevice *) = ^(AudioDevice *dev) {
+        NSString *cid = [self cardIDForCardIndex:dev.cardIndex];
+        if (!cid) cid = [NSString stringWithFormat:@"card%d", dev.cardIndex];
+        // Replace spaces/hyphens with underscores for valid ALSA name
+        cid = [cid stringByReplacingOccurrencesOfString:@" " withString:@"_"];
+        cid = [cid stringByReplacingOccurrencesOfString:@"-" withString:@"_"];
+        return [NSString stringWithFormat:@"%@_%d", cid, dev.deviceIndex];
+    };
 
-        // Control interface (mixer) can keep type hw — no format conversion needed.
+    // Helper: probe capabilities for a device (playback or capture direction)
+    NSDictionary *(^probeCaps)(AudioDevice *, NSString *) = ^NSDictionary *(AudioDevice *dev, NSString *direction) {
+        NSDictionary *stream0 = [self parseStream0ForCard:dev.cardIndex];
+        if (!stream0) return nil;
+        NSString *pfx = direction;
+        NSNumber *ch = [stream0 objectForKey:[NSString stringWithFormat:@"%@_channels", pfx]];
+        NSNumber *rate = [stream0 objectForKey:[NSString stringWithFormat:@"%@_rate", pfx]];
+        NSArray *fmts = [stream0 objectForKey:[NSString stringWithFormat:@"%@_formats", pfx]];
+        if (!ch || !rate) return (NSDictionary *)nil;
+        NSMutableDictionary *caps = [NSMutableDictionary dictionary];
+        [caps setObject:ch forKey:@"channels"];
+        [caps setObject:rate forKey:@"rate"];
+        [caps setObject:(fmts ?: @[@"S16_LE"]) forKey:@"formats"];
+        return caps;
+    };
+
+    // Helper: get hardware constraints for a device direction
+    NSDictionary *(^probeConstraints)(AudioDevice *, NSString *) = ^(AudioDevice *dev, NSString *direction) {
+        return [self dumpHWParamsForCard:dev.cardIndex
+                                 device:dev.deviceIndex
+                                 stream:direction];
+    };
+
+    BOOL hasOutput = (outDev != nil);
+    BOOL hasInput  = (inDev != nil);
+
+    // ---- Default PCM (asym when both directions available) ----
+    if (hasOutput && hasInput) {
+        NSString *outSuffix = pcmSuffix(outDev);
+        NSString *inSuffix  = pcmSuffix(inDev);
+        NSString *outPcm    = [NSString stringWithFormat:@"plug:dmix_%@", outSuffix];
+        NSString *inPcm     = [NSString stringWithFormat:@"plug:%@_cap", inSuffix];
+
+        [content appendString:@"pcm.!default {\n"];
+        [content appendString:@"    type asym\n"];
+        [content appendFormat:@"    playback.pcm \"%@\"\n", outPcm];
+        [content appendFormat:@"    capture.pcm \"%@\"\n", inPcm];
+        [content appendString:@"}\n\n"];
+    } else if (hasOutput) {
+        NSString *outSuffix = pcmSuffix(outDev);
+        [content appendString:@"pcm.!default {\n"];
+        [content appendString:@"    type plug\n"];
+        [content appendFormat:@"    slave.pcm \"plug:dmix_%@\"\n", outSuffix];
+        [content appendString:@"}\n\n"];
+    } else if (hasInput) {
+        [content appendString:@"pcm.!default {\n"];
+        [content appendString:@"    type plug\n"];
+        [content appendString:@"    slave.pcm {\n"];
+        [content appendFormat:@"        type hw\n"];
+        [content appendFormat:@"        card %d\n", inDev.cardIndex];
+        [content appendFormat:@"        device %d\n", inDev.deviceIndex];
+        [content appendString:@"    }\n"];
+        [content appendString:@"}\n\n"];
+    }
+
+    // ---- Control interface ----
+    // Use the output device's card for the mixer, or input if no output.
+    AudioDevice *ctlDev = outDev ?: inDev;
+    if (ctlDev) {
+        NSString *ctlCardId = [self cardIDForCardIndex:ctlDev.cardIndex];
+        if (!ctlCardId) ctlCardId = [NSString stringWithFormat:@"%d", ctlDev.cardIndex];
         [content appendFormat:@"ctl.!default {\n"];
         [content appendFormat:@"    type hw\n"];
-        [content appendFormat:@"    card %@\n", cardId];
+        [content appendFormat:@"    card %@\n", ctlCardId];
+        [content appendFormat:@"}\n\n"];
+    }
+
+    // ---- Playback dmix block ----
+    if (hasOutput) {
+        NSDictionary *caps = probeCaps(outDev, @"playback");
+        NSDictionary *constraints = probeConstraints(outDev, @"playback");
+
+        int channels   = [[caps objectForKey:@"channels"] intValue];
+        int rate       = [[caps objectForKey:@"rate"] intValue];
+        NSArray *fmts  = [caps objectForKey:@"formats"];
+        NSString *fmt  = [self preferredFormatFromFormats:fmts];
+        int ipcKey     = [self ipcKeyForCard:outDev.cardIndex device:outDev.deviceIndex];
+
+        // Clamp channels to reasonable range (2-8, default 2)
+        if (channels < 2) channels = 2;
+        if (channels > 8) channels = 8;
+
+        // Default rate fallback
+        if (rate <= 0) rate = 48000;
+
+        // Period and buffer sizes from hardware constraints
+        int psMin = [[constraints objectForKey:@"period_size_min"] intValue];
+        int psMax = [[constraints objectForKey:@"period_size_max"] intValue];
+        int bsMin = [[constraints objectForKey:@"buffer_size_min"] intValue];
+        int bsMax = [[constraints objectForKey:@"buffer_size_max"] intValue];
+
+        int periodSize = (psMin > 0 && psMax > 0)
+            ? [self suggestedPeriodSizeFromMin:psMin max:psMax]
+            : 1024;
+        int bufferSize = (bsMin > 0 && bsMax > 0)
+            ? [self suggestedBufferSizeFromMin:bsMin max:bsMax]
+            : 4096;
+        // Ensure buffer is at least 2x period
+        if (bufferSize < periodSize * 2) bufferSize = periodSize * 2;
+        if (bsMax > 0 && bufferSize > bsMax) bufferSize = bsMax;
+        if (bsMin > 0 && bufferSize < bsMin) bufferSize = bsMin;
+
+        NSString *outSuffix = pcmSuffix(outDev);
+
+        [content appendFormat:@"# Playback dmix for %@\n", outDev.displayName ?: outDev.name];
+        [content appendFormat:@"pcm.dmix_%@ {\n", outSuffix];
+        [content appendFormat:@"    type dmix\n"];
+        [content appendFormat:@"    ipc_key %d\n", ipcKey];
+        [content appendFormat:@"    ipc_perm 0666\n"];
+        [content appendFormat:@"    slave {\n"];
+        [content appendFormat:@"        pcm {\n"];
+        [content appendFormat:@"            type hw\n"];
+        [content appendFormat:@"            card %d\n", outDev.cardIndex];
+        [content appendFormat:@"            device %d\n", outDev.deviceIndex];
+        [content appendFormat:@"        }\n"];
+        [content appendFormat:@"        rate %d\n", rate];
+        [content appendFormat:@"        format %@\n", fmt];
+        [content appendFormat:@"        channels %d\n", channels];
+        [content appendFormat:@"        period_size %d\n", periodSize];
+        [content appendFormat:@"        buffer_size %d\n", bufferSize];
+        [content appendFormat:@"    }\n"];
+        [content appendFormat:@"}\n\n"];
+    }
+
+    // ---- Capture plug+hw block ----
+    if (hasInput) {
+        NSString *inSuffix = pcmSuffix(inDev);
+        [content appendFormat:@"# Capture for %@\n", inDev.displayName ?: inDev.name];
+        [content appendFormat:@"pcm.%@_cap {\n", inSuffix];
+        [content appendFormat:@"    type plug\n"];
+        [content appendFormat:@"    slave.pcm {\n"];
+        [content appendFormat:@"        type hw\n"];
+        [content appendFormat:@"        card %d\n", inDev.cardIndex];
+        [content appendFormat:@"        device %d\n", inDev.deviceIndex];
+        [content appendFormat:@"    }\n"];
         [content appendFormat:@"}\n"];
     }
 

@@ -122,11 +122,70 @@ static BOOL detectKeyboardFromUSB(const char **layout,
     }
     KbdLog(@"    %d USB device(s) scanned, no RPI keyboard found\n", dev_count);
     closedir(usb_dir);
+#elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    KbdLog(@"    Scanning USB devices via system command...\n");
+    const char *cmd = NULL;
+#if defined(__FreeBSD__)
+    cmd = "usbconfig list";
+#elif defined(__OpenBSD__) || defined(__NetBSD__)
+    cmd = "usbdevs -v";
+#endif
+    FILE *usb_fp = popen(cmd, "r");
+    if (!usb_fp) {
+        KbdLog(@"    ✗ cannot run '%s'\n", cmd);
+        (void)layout; (void)variant; (void)options;
+        return NO;
+    }
+    char line[512];
+    BOOL found = NO;
+    while (fgets(line, sizeof(line), usb_fp)) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        BOOL known_vid = NO;
+        for (int i = 0; rpiKeyboardVIDs[i] && rpiKeyboardPIDs[i]; i++) {
+            if (strstr(line, rpiKeyboardVIDs[i]) && strstr(line, rpiKeyboardPIDs[i])) {
+                known_vid = YES;
+                break;
+            }
+        }
+        if (!known_vid) continue;
+        BOOL is_rpi = (strstr(line, "RPI") != NULL
+                       || strstr(line, "Raspberry") != NULL
+                       || strstr(line, "raspberry") != NULL
+                       || strstr(line, "Pi ") != NULL);
+        KbdLog(@"    USB device: %s\n", line);
+        if (!is_rpi) {
+            KbdLog(@"      not an RPI keyboard, skipping\n");
+            continue;
+        }
+        const char *last_space = strrchr(line, ' ');
+        int idx = 0;
+        if (last_space) {
+            const char *tok = last_space + 1;
+            if (*tok >= '0' && *tok <= '9') {
+                idx = atoi(tok);
+            } else {
+                KbdLog(@"      no trailing index, deferring\n");
+                continue;
+            }
+        }
+        if (idx < 0 || idx > 14) idx = 0;
+        *layout = rpiKeyboardLayout(idx);
+        *variant = "";
+        *options = "";
+        KbdLog(@"      RPI keyboard index %d → layout=\"%s\"\n", idx, *layout);
+        found = YES;
+        break;
+    }
+    pclose(usb_fp);
+    if (!found) KbdLog(@"    No RPI keyboard found\n");
+    if (!found) { (void)layout; (void)variant; (void)options; }
+    return found;
 #else
     (void)layout;
     (void)variant;
     (void)options;
-    KbdLog(@"    ✗ only available on Linux\n");
+    KbdLog(@"    ✗ only available on Linux and BSD\n");
 #endif
     return NO;
 }
@@ -155,11 +214,41 @@ static BOOL detectKeyboardFromDeviceTree(const char **layout,
     *options = "";
     KbdLog(@"    Country code: %d → layout=\"%s\"\n", idx, *layout);
     return YES;
+#elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    static const char *dt_paths[] = {
+        "/sys/firmware/devicetree/chosen/rpi-country-code",
+        "/boot/dtb/chosen/rpi-country-code",
+        NULL
+    };
+    for (int i = 0; dt_paths[i]; i++) {
+        KbdLog(@"    Path: %s\n", dt_paths[i]);
+        FILE *f = fopen(dt_paths[i], "rb");
+        if (!f) {
+            KbdLog(@"    ✗ file does not exist\n");
+            continue;
+        }
+        unsigned char buf[4];
+        size_t n = fread(buf, 1, sizeof(buf), f);
+        fclose(f);
+        if (n != 4) {
+            KbdLog(@"    ✗ read %zu bytes (expected 4)\n", n);
+            continue;
+        }
+        int idx = (buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3];
+        if (idx < 0 || idx > 14) idx = 0;
+        *layout = rpiKeyboardLayout(idx);
+        *variant = "";
+        *options = "";
+        KbdLog(@"    Country code: %d → layout=\"%s\"\n", idx, *layout);
+        return YES;
+    }
+    (void)layout; (void)variant; (void)options;
+    return NO;
 #else
     (void)layout;
     (void)variant;
     (void)options;
-    KbdLog(@"    ✗ only available on Linux\n");
+    KbdLog(@"    ✗ only available on Linux and BSD\n");
     return NO;
 #endif
 }

@@ -107,4 +107,14 @@
 - (BOOL)isOutputDeviceUsable:(AudioDevice *)device;
 - (BOOL)isInputDeviceUsable:(AudioDevice *)device;
 
+// Capability probing (for config generation)
+- (NSDictionary *)parseStream0ForCard:(int)cardIndex;
+- (NSDictionary *)dumpHWParamsForCard:(int)cardIndex
+                              device:(int)deviceIndex
+                              stream:(NSString *)stream;
+- (NSString *)preferredFormatFromFormats:(NSArray *)formats;
+- (int)ipcKeyForCard:(int)cardIndex device:(int)deviceIndex;
+- (int)suggestedPeriodSizeFromMin:(int)min max:(int)max;
+- (int)suggestedBufferSizeFromMin:(int)min max:(int)max;
+
 @end

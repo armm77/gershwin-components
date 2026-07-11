@@ -668,6 +668,11 @@ static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServ
     }
 
     unsigned long windowValue = [windowId unsignedLongValue];
+
+    /* If the Info submenu contains an "Info Panel..." or Cmd-? item,
+       move it to the parent menu and rename it "About...". */
+    menuData = [self promoteAboutItemFromMenuData:menuData];
+
     // NSLog(@"GNUStepMenuImporter: Building menu for window %lu", windowValue);
     NSMenu *menu = [self menuFromData:menuData
                              windowId:windowValue
@@ -1114,6 +1119,81 @@ static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServ
     if ([self hasMenuForWindow:windowId] && self.appMenuWidget) {
         [self.appMenuWidget checkAndDisplayMenuForNewlyRegisteredWindow:windowId];
     }
+}
+
+#pragma mark - Info Panel / About... fixup
+
+- (NSDictionary *)promoteAboutItemFromMenuData:(NSDictionary *)menuData
+{
+    NSArray *itemsData = [menuData objectForKey:@"items"];
+    if (![itemsData isKindOfClass:[NSArray class]] || [itemsData count] == 0) {
+        return menuData;
+    }
+
+    for (NSUInteger i = 0; i < [itemsData count]; i++) {
+        NSDictionary *itemData = [itemsData objectAtIndex:i];
+        if (![itemData isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+
+        NSString *title = [itemData objectForKey:@"title"];
+        if (![title isKindOfClass:[NSString class]] || ![title isEqualToString:@"Info"]) {
+            continue;
+        }
+
+        NSDictionary *submenuData = [itemData objectForKey:@"submenu"];
+        if (![submenuData isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+
+        NSArray *submenuItems = [submenuData objectForKey:@"items"];
+        if (![submenuItems isKindOfClass:[NSArray class]]) {
+            continue;
+        }
+
+        for (NSUInteger j = 0; j < [submenuItems count]; j++) {
+            NSDictionary *subItemData = [submenuItems objectAtIndex:j];
+            if (![subItemData isKindOfClass:[NSDictionary class]]) {
+                continue;
+            }
+
+            NSString *subTitle = [subItemData objectForKey:@"title"];
+            NSString *subKey = [subItemData objectForKey:@"keyEquivalent"];
+
+            BOOL isInfoPanel = [subTitle isKindOfClass:[NSString class]] && [subTitle isEqualToString:@"Info Panel..."];
+            BOOL isHelpKey = [subKey isKindOfClass:[NSString class]] && [subKey isEqualToString:@"?"];
+
+            if (!isInfoPanel && !isHelpKey) {
+                continue;
+            }
+
+            /* Remove item from submenu. */
+            NSMutableArray *newSubmenuItems = [submenuItems mutableCopy];
+            [newSubmenuItems removeObjectAtIndex:j];
+
+            NSMutableDictionary *newSubmenuData = [submenuData mutableCopy];
+            [newSubmenuData setObject:newSubmenuItems forKey:@"items"];
+
+            /* Update the Info submenu item to use the new submenu. */
+            NSMutableArray *newItems = [itemsData mutableCopy];
+            NSMutableDictionary *newInfoItem = [itemData mutableCopy];
+            [newInfoItem setObject:newSubmenuData forKey:@"submenu"];
+            [newItems replaceObjectAtIndex:i withObject:newInfoItem];
+
+            /* Create the promoted "About..." item. */
+            NSMutableDictionary *aboutItemData = [subItemData mutableCopy];
+            [aboutItemData setObject:@"About..." forKey:@"title"];
+            [newItems insertObject:aboutItemData atIndex:i + 1];
+
+            NSMutableDictionary *newMenuData = [menuData mutableCopy];
+            [newMenuData setObject:newItems forKey:@"items"];
+
+            NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Promoted '%@' from Info submenu to parent menu in menuData", subTitle);
+            return newMenuData;
+        }
+    }
+
+    return menuData;
 }
 
 @end

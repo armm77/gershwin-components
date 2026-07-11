@@ -87,16 +87,6 @@
     [_progressLabel setFont:[NSFont systemFontOfSize:11]];
     [_stepView addSubview:_progressLabel];
 
-    _infoLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 18, 330, 64)];
-    [_infoLabel setStringValue:NSLocalizedString(@"The image will be downloaded and written to the selected device. This may take several minutes depending on network speed and image size.", @"")];
-    [_infoLabel setFont:[NSFont systemFontOfSize:10]];
-    [_infoLabel setAlignment:NSCenterTextAlignment];
-    [_infoLabel setBezeled:NO];
-    [_infoLabel setDrawsBackground:NO];
-    [_infoLabel setEditable:NO];
-    [_infoLabel setSelectable:NO];
-    [[_infoLabel cell] setWraps:YES];
-    [_stepView addSubview:_infoLabel];
 }
 
 - (void)startInstallation
