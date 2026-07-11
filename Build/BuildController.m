@@ -13,9 +13,14 @@ static const CGFloat kSideMargin = 24.0;
 static const CGFloat kBottomMargin = 20.0;
 static const CGFloat kBtnHeight = 20.0;
 static const CGFloat kBtnWide = 100.0;
-static const CGFloat kBtnHSpace = 10.0;
 static const CGFloat kBarHeight = 20.0;
 static const CGFloat kLineHeight = 18.0;
+static const CGFloat kIconSide = 64.0;
+static const CGFloat kIconLeft = 24.0;
+static const CGFloat kTextLeft = 104.0;
+static const CGFloat kTopMargin = 15.0;
+static const CGFloat kSpace8 = 8.0;
+static const CGFloat kSpace16 = 16.0;
 
 #pragma mark - BWLogWindowController
 
@@ -196,11 +201,17 @@ static const CGFloat kLineHeight = 18.0;
 
     CGFloat contentW = kWinWidth - 2 * kSideMargin;
     CGFloat btnRight = kWinWidth - kSideMargin;
-    CGFloat textW = kWinWidth - kSideMargin - kSideMargin;
+    CGFloat textW = contentW - (kTextLeft - kSideMargin);
+    NSString *name = [self displayNameFromMakefile];
 
-    CGFloat winH = kBottomMargin + kBtnHeight + kBtnHSpace + kBarHeight + kBtnHSpace + kLineHeight + 15;
+    CGFloat winH = kBottomMargin + kBtnHeight + kSpace16
+                 + kBarHeight + kSpace8
+                 + kLineHeight + kSpace8
+                 + kIconSide
+                 + kTopMargin;
+
     _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, kWinWidth, winH)
-                                          styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
+                                          styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable
                                             backing:NSBackingStoreBuffered
                                               defer:NO];
 
@@ -216,12 +227,10 @@ static const CGFloat kLineHeight = 18.0;
     [_cancelButton setEnabled:NO];
     [[_window contentView] addSubview:_cancelButton];
 
-    y += kBtnHeight + kBtnHSpace;
+    y += kBtnHeight + kSpace16;
 
     /* Progress bar */
-    CGFloat barX = kSideMargin;
-    CGFloat barW = contentW;
-    _progressBar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(barX, y, barW, kBarHeight)];
+    _progressBar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(kTextLeft, y, textW, kBarHeight)];
     [_progressBar setStyle:NSProgressIndicatorBarStyle];
     [_progressBar setIndeterminate:NO];
     [_progressBar setMinValue:0.0];
@@ -229,11 +238,11 @@ static const CGFloat kLineHeight = 18.0;
     [_progressBar setDoubleValue:0.0];
     [[_window contentView] addSubview:_progressBar];
 
-    y += kBarHeight + kBtnHSpace;
+    y += kBarHeight + kSpace8;
 
     /* Status field */
-    _statusField = [[NSTextField alloc] initWithFrame:NSMakeRect(kSideMargin, y, textW, kLineHeight)];
-    [_statusField setStringValue:@"Ready"];
+    _statusField = [[NSTextField alloc] initWithFrame:NSMakeRect(kTextLeft, y, textW, kLineHeight)];
+    [_statusField setStringValue:name ? [NSString stringWithFormat:@"Building %@…", name] : @"Building…"];
     [_statusField setBezeled:NO];
     [_statusField setDrawsBackground:NO];
     [_statusField setEditable:NO];
@@ -242,7 +251,41 @@ static const CGFloat kLineHeight = 18.0;
     [_statusField setFont:[NSFont systemFontOfSize:11.0]];
     [[_window contentView] addSubview:_statusField];
 
-    [_window setTitle:@"Build"];
+    y += kLineHeight + kSpace8;
+
+    /* Icon and app name */
+    _iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(kIconLeft, y, kIconSide, kIconSide)];
+    [_iconView setImageScaling:NSImageScaleProportionallyUpOrDown];
+    NSImage *icon = [self productIconFromMakefile];
+    if (!icon) {
+        icon = [[NSWorkspace sharedWorkspace] iconForFileType:@"app"];
+    }
+    if (icon) {
+        NSLog(@"icon: loaded size=%@ reps=%ld", NSStringFromSize([icon size]), [[icon representations] count]);
+        // Convert to a new image to avoid display issues with certain rep types
+        NSImage *displayIcon = [[NSImage alloc] initWithSize:NSMakeSize(kIconSide, kIconSide)];
+        [displayIcon lockFocus];
+        [icon drawInRect:NSMakeRect(0, 0, kIconSide, kIconSide)
+                fromRect:NSZeroRect
+               operation:NSCompositeSourceOver
+                fraction:1.0];
+        [displayIcon unlockFocus];
+        [_iconView setImage:displayIcon];
+    }
+    [[_window contentView] addSubview:_iconView];
+
+    if (name) {
+        _nameField = [[NSTextField alloc] initWithFrame:NSMakeRect(kTextLeft, y + (kIconSide - kLineHeight) / 2, textW, kLineHeight)];
+        [_nameField setStringValue:name];
+        [_nameField setBezeled:NO];
+        [_nameField setDrawsBackground:NO];
+        [_nameField setEditable:NO];
+        [_nameField setSelectable:NO];
+        [_nameField setFont:[NSFont systemFontOfSize:13.0]];
+        [[_window contentView] addSubview:_nameField];
+    }
+
+    [_window setTitle:name ? name : @"Build"];
     [_window setDelegate:self];
     [_window center];
     [_window orderFront:nil];
@@ -511,8 +554,11 @@ static const CGFloat kLineHeight = 18.0;
 
     [self runPrebuildStepsInDirectory:directory];
 
-    if (_statusField) [_statusField setStringValue:@"Building…"];
-    if (_window) [_window setTitle:@"Building…"];
+    NSString *dName = [self displayNameFromMakefile];
+    if (_statusField) {
+        [_statusField setStringValue:dName ? [NSString stringWithFormat:@"Building %@…", dName] : @"Building…"];
+    }
+    if (_window) [_window setTitle:dName ? [NSString stringWithFormat:@"Building %@", dName] : @"Building…"];
     else fprintf(stderr, "Building…\n");
     [_logController appendLog:@"=== Build started ===\n"];
 
@@ -657,13 +703,15 @@ static const CGFloat kLineHeight = 18.0;
         exit(status == 0 ? 0 : status);
     }
 
+    NSString *dName = [self displayNameFromMakefile];
+
     if (status == 0) {
         [_progressBar setDoubleValue:100.0];
-        [_statusField setStringValue:@"Build completed successfully"];
-        [_window setTitle:@"Build"];
+        [_statusField setStringValue:dName ? [NSString stringWithFormat:@"%@ built successfully", dName] : @"Build completed successfully"];
+        [_window setTitle:dName ? dName : @"Build"];
     } else {
-        [_statusField setStringValue:@"Build failed"];
-        [_window setTitle:@"Build"];
+        [_statusField setStringValue:dName ? [NSString stringWithFormat:@"Failed to build %@", dName] : @"Build failed"];
+        [_window setTitle:dName ? dName : @"Build"];
     }
 
     [_logController appendLog:[NSString stringWithFormat:
@@ -671,10 +719,13 @@ static const CGFloat kLineHeight = 18.0;
 
     if (_window) [_window orderOut:nil];
 
+    NSString *succeededMsg = dName ? [NSString stringWithFormat:@"%@ built successfully.", dName] : @"The build completed successfully.";
+    NSString *failedTitle = dName ? [NSString stringWithFormat:@"Failed to build %@", dName] : @"Build Failed";
+
     NSAlert *alert = [[NSAlert alloc] init];
-    [alert setMessageText:(status == 0) ? @"Build Succeeded" : @"Build Failed"];
+    [alert setMessageText:(status == 0) ? @"Build Succeeded" : failedTitle];
     [alert setInformativeText:(status == 0)
-        ? @"The build completed successfully."
+        ? succeededMsg
         : [self formatErrorOutput:self.buildOutput]];
     if (status == 0) {
         NSImage *check = [NSImage imageNamed:@"check"];
@@ -905,11 +956,203 @@ static const CGFloat kLineHeight = 18.0;
     [NSApp terminate:self];
 }
 
+- (NSString *)displayNameFromMakefile
+{
+    NSString *content = [NSString stringWithContentsOfFile:makefilePath
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:NULL];
+    if (!content) return nil;
+
+    NSArray *lines = [content componentsSeparatedByString:@"\n"];
+    for (NSString *varName in @[@"APP_NAME", @"PACKAGE_NAME"]) {
+        for (NSString *line in lines) {
+            NSString *trimmed = [line stringByTrimmingCharactersInSet:
+                [NSCharacterSet whitespaceCharacterSet]];
+            if ([trimmed hasPrefix:varName]) {
+                NSString *val = [self parseVariableValue:trimmed];
+                if ([val length] > 0) return val;
+            }
+        }
+    }
+    return nil;
+}
+
+- (NSImage *)productIconFromMakefile
+{
+    NSString *content = [NSString stringWithContentsOfFile:makefilePath
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:NULL];
+    if (!content) return nil;
+
+    NSString *target = [self productNameFromMakefile];
+    NSString *dir = [makefilePath stringByDeletingLastPathComponent];
+
+    // Join backslash continuations
+    NSMutableString *joined = [NSMutableString stringWithString:content];
+    [joined replaceOccurrencesOfString:@"\\\n"
+                            withString:@" "
+                               options:0
+                                 range:NSMakeRange(0, [joined length])];
+    NSArray *joinedLines = [joined componentsSeparatedByString:@"\n"];
+
+    // Step 1: try APPLICATION_ICON from makefile
+    NSString *imgName = nil;
+    for (NSString *line in joinedLines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        NSArray *vars = @[[NSString stringWithFormat:@"%@_APPLICATION_ICON", target],
+                          @"APPLICATION_ICON"];
+        for (NSString *var in vars) {
+            if ([trimmed hasPrefix:var]) {
+                imgName = [self parseVariableValue:trimmed];
+                if ([imgName length] > 0) break;
+            }
+        }
+        if (imgName) break;
+    }
+
+    if (imgName) {
+        NSArray *exts = @[@"png", @"tiff", @"jpg", @"jpeg", @"icns", @"tif",
+                          [imgName pathExtension]];
+        NSArray *locations = @[dir, [dir stringByAppendingPathComponent:@"Resources"]];
+        NSString *stem = [imgName stringByDeletingPathExtension];
+
+        for (NSString *location in locations) {
+            for (NSString *ext in exts) {
+                NSString *path = [[location stringByAppendingPathComponent:stem]
+                    stringByAppendingPathExtension:ext];
+                if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+                    NSLog(@"icon: found at %@", path);
+                    return [[NSImage alloc] initWithContentsOfFile:path];
+                }
+                NSLog(@"icon: not at %@", path);
+            }
+            NSString *exactPath = [location stringByAppendingPathComponent:imgName];
+            if ([[NSFileManager defaultManager] fileExistsAtPath:exactPath]) {
+                NSLog(@"icon: found at %@", exactPath);
+                return [[NSImage alloc] initWithContentsOfFile:exactPath];
+            }
+            NSLog(@"icon: not at %@", exactPath);
+        }
+
+        // Try RESOURCE_FILES entries matching imgName
+        for (NSString *line in joinedLines) {
+            NSString *trimmed = [line stringByTrimmingCharactersInSet:
+                [NSCharacterSet whitespaceCharacterSet]];
+            if (![trimmed hasPrefix:@"RESOURCE_FILES"] &&
+                (target && ![trimmed hasPrefix:[NSString stringWithFormat:@"%@_RESOURCE_FILES", target]])) continue;
+            NSString *val = [self parseVariableValue:trimmed];
+            if ([val length] == 0) continue;
+            NSArray *parts = [val componentsSeparatedByCharactersInSet:
+                [NSCharacterSet whitespaceCharacterSet]];
+            for (NSString *part in parts) {
+                if ([part length] == 0 || [part isEqualToString:@"\\"]) continue;
+                if ([[part lastPathComponent] isEqualToString:imgName]) {
+                    NSString *fullPath = [dir stringByAppendingPathComponent:part];
+                    fullPath = [fullPath stringByStandardizingPath];
+                    if ([[NSFileManager defaultManager] fileExistsAtPath:fullPath]) {
+                        NSLog(@"icon: found via RESOURCE_FILES at %@", fullPath);
+                        return [[NSImage alloc] initWithContentsOfFile:fullPath];
+                    }
+                    NSLog(@"icon: RESOURCE_FILES entry %@ not found at %@", part, fullPath);
+                }
+            }
+        }
+    }
+
+    // Step 2: scan RESOURCE_FILES for icon-like filenames
+    for (NSString *line in joinedLines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        if (![trimmed hasPrefix:@"RESOURCE_FILES"] &&
+            (target && ![trimmed hasPrefix:[NSString stringWithFormat:@"%@_RESOURCE_FILES", target]])) continue;
+        NSString *val = [self parseVariableValue:trimmed];
+        if ([val length] == 0) continue;
+        NSArray *parts = [val componentsSeparatedByCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        for (NSString *part in parts) {
+            if ([part length] == 0 || [part isEqualToString:@"\\"]) continue;
+            NSString *fn = [part lastPathComponent];
+            NSString *fnLower = [fn lowercaseString];
+            if ([fnLower hasPrefix:@"appicon"] || [fnLower hasPrefix:@"icon"] ||
+                [fnLower hasPrefix:@"icon_"]) {
+                NSString *fullPath = [dir stringByAppendingPathComponent:part];
+                fullPath = [fullPath stringByStandardizingPath];
+                if ([[NSFileManager defaultManager] fileExistsAtPath:fullPath]) {
+                    NSLog(@"icon: found icon-like resource at %@", fullPath);
+                    return [[NSImage alloc] initWithContentsOfFile:fullPath];
+                }
+            }
+        }
+    }
+
+    // Step 3: look for pre-built .app bundles in source tree
+    NSArray *subDirs = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:NULL];
+    for (NSString *sub in subDirs) {
+        if ([[sub pathExtension] isEqualToString:@"app"]) {
+            NSString *appBundle = [dir stringByAppendingPathComponent:sub];
+            NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:appBundle];
+            if (icon) {
+                NSLog(@"icon: from pre-built .app %@", appBundle);
+                return icon;
+            }
+        }
+    }
+
+    // Step 4: look for .app bundles in SUBPROJECTS directories
+    for (NSString *line in joinedLines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        if ([trimmed hasPrefix:@"SUBPROJECTS"]) {
+            NSString *val = [self parseVariableValue:trimmed];
+            if ([val length] == 0) continue;
+            NSArray *subs = [val componentsSeparatedByCharactersInSet:
+                [NSCharacterSet whitespaceCharacterSet]];
+            for (NSString *sub in subs) {
+                if ([sub length] == 0 || [sub isEqualToString:@"\\"]) continue;
+                NSString *subDir = [dir stringByAppendingPathComponent:sub];
+                NSArray *subContents = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:subDir error:NULL];
+                for (NSString *item in subContents) {
+                    if ([[item pathExtension] isEqualToString:@"app"]) {
+                        NSString *appBundle = [subDir stringByAppendingPathComponent:item];
+                        NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:appBundle];
+                        if (icon) {
+                            NSLog(@"icon: from SUBPROJECTS .app %@", appBundle);
+                            return icon;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 5: try pre-built .app bundle matching target name
+    if (target) {
+        NSString *appBundle = [[dir stringByAppendingPathComponent:target]
+            stringByAppendingPathExtension:@"app"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:appBundle]) {
+            NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:appBundle];
+            if (icon) {
+                NSLog(@"icon: from pre-built .app %@", appBundle);
+                return icon;
+            }
+        }
+    }
+
+    NSLog(@"icon: not found");
+    return nil;
+}
+
 #pragma mark - Helpers
 
 - (NSString *)productNameFromMakefile
 {
-    NSString *content = [NSString stringWithContentsOfFile:makefilePath
+    return [self productNameFromMakefile:makefilePath];
+}
+
+- (NSString *)productNameFromMakefile:(NSString *)path
+{
+    NSString *content = [NSString stringWithContentsOfFile:path
                                                   encoding:NSUTF8StringEncoding
                                                      error:NULL];
     if (!content) return nil;
@@ -986,6 +1229,27 @@ static const CGFloat kLineHeight = 18.0;
                 count += [self countSourceFilesInMakefile:incPath
                                                    target:target
                                                     depth:depth + 1];
+            }
+        }
+
+        // Recurse into SUBPROJECTS
+        if ([trimmed hasPrefix:@"SUBPROJECTS"]) {
+            NSString *val = [self parseVariableValue:trimmed];
+            if ([val length] > 0) {
+                NSArray *subs = [val componentsSeparatedByCharactersInSet:
+                    [NSCharacterSet whitespaceCharacterSet]];
+                for (NSString *sub in subs) {
+                    if ([sub length] == 0 || [sub isEqualToString:@"\\"]) continue;
+                    NSString *subMf = [[dir stringByAppendingPathComponent:sub]
+                        stringByAppendingPathComponent:@"GNUmakefile"];
+                    subMf = [subMf stringByStandardizingPath];
+                    if ([[NSFileManager defaultManager] fileExistsAtPath:subMf]) {
+                        NSString *subTarget = [self productNameFromMakefile:subMf];
+                        count += [self countSourceFilesInMakefile:subMf
+                                                           target:subTarget
+                                                            depth:depth + 1];
+                    }
+                }
             }
         }
     }

@@ -22,6 +22,8 @@
     NSPipe *installPipe;
     BOOL installShouldLaunch;
     BWLogWindowController *_logController;
+    NSImageView *_iconView;
+    NSTextField *_nameField;
     NSInteger _totalFileCount;
     NSInteger _compiledFileCount;
     NSString *_objDir;
