@@ -321,6 +321,7 @@ static void writeKeyboardConfigFile(const char *layout,
         NSLog(@"KeyboardManager: /etc/wscons.conf already exists, not overwriting");
     }
 #endif
+    (void)vr;
     (void)op;
 }
 static const char *findSetxkbmap(void)
@@ -350,7 +351,7 @@ static BOOL isConfigFileNewerThanParent(const char *path)
     *slash = '\0';
     if (stat(parent, &ds) != 0) return NO;
     time_t dir_time;
-#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#if defined(__FreeBSD__) || defined(__NetBSD__)
     dir_time = ds.st_birthtime;
 #else
     dir_time = ds.st_ctime;

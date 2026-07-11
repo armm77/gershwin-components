@@ -2760,9 +2760,9 @@ static bool isDetachedDaemon(const char *comm)
 
 - (void)updatePasswordFieldVisibility
 {
-    NSString *username = [usernameField stringValue];
     BOOL hide = NO;
 #if defined(__linux__)
+    NSString *username = [usernameField stringValue];
     if (username && [username length] > 0) {
         struct passwd *pw = getpwnam([username UTF8String]);
         if (pw) {
