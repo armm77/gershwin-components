@@ -527,8 +527,11 @@ static NSString *const kMicControl = @"Mic";
     NSString *probeId = [NSString stringWithFormat:@"hw:%d,%d",
                          device.cardIndex, device.deviceIndex];
 
-    // Try standard S16_LE first
-    int result = [self probeOutputWithFormat:nil channels:nil rate:nil probeId:probeId];
+    // Try standard S16_LE at 48kHz first — nearly all modern hardware
+    // supports this format.  The old probe defaulted to U8/8kHz (by passing
+    // nil) which most devices reject, causing every probe to be inconclusive.
+    int result = [self probeOutputWithFormat:@"S16_LE"
+                                channels:@"2" rate:@"48000" probeId:probeId];
     if (result != -1) return (BOOL)result;
 
     // Format error — retry with IEC958_SUBFRAME_LE (HDMI/SPDIF)
@@ -536,10 +539,7 @@ static NSString *const kMicControl = @"Mic";
                                 channels:@"2" rate:@"48000" probeId:probeId];
     if (result != -1) return (BOOL)result;
 
-    // Both probes were inconclusive (e.g. format/rate/channel mismatch that
-    // neither S16_LE nor IEC958 could satisfy).  Assume the device is usable
-    // — the original probe logic treated any non-"audio open error" failure
-    // as "usable", so we preserve that fallback.
+    // Both probes were inconclusive.  Assume the device is usable anyway.
     return YES;
 }
 
@@ -579,7 +579,8 @@ static NSString *const kMicControl = @"Mic";
     NSString *probeId = [NSString stringWithFormat:@"hw:%d,%d",
                          device.cardIndex, device.deviceIndex];
 
-    int result = [self probeInputWithFormat:nil channels:nil rate:nil probeId:probeId];
+    int result = [self probeInputWithFormat:@"S16_LE"
+                                channels:@"1" rate:@"48000" probeId:probeId];
     if (result != -1) return (BOOL)result;
 
     result = [self probeInputWithFormat:@"IEC958_SUBFRAME_LE"
@@ -1893,11 +1894,18 @@ static NSString *const kMicControl = @"Mic";
         // Find opening brace of the dmix block
         NSRange braceRange = [afterDmix rangeOfString:@"{"];
         if (braceRange.location != NSNotFound) {
-            NSString *dmixBody = [afterDmix substringFromIndex:braceRange.location];
-            // Find closing brace
-            NSRange closeBrace = [dmixBody rangeOfString:@"}"];
-            if (closeBrace.location != NSNotFound) {
-                dmixBody = [dmixBody substringToIndex:closeBrace.location];
+            NSString *dmixBody = [afterDmix substringFromIndex:braceRange.location + 1];
+            // Find closing brace at matching depth (count nesting)
+            int depth = 1;
+            NSUInteger closeIdx = NSNotFound;
+            for (NSUInteger i = 0; i < [dmixBody length] && depth > 0; i++) {
+                unichar c = [dmixBody characterAtIndex:i];
+                if (c == '{') depth++;
+                else if (c == '}') depth--;
+                if (depth == 0) closeIdx = i;
+            }
+            if (closeIdx != NSNotFound) {
+                dmixBody = [dmixBody substringToIndex:closeIdx];
             }
             // Scan for "card <N>" inside the slave block
             NSScanner *s = [NSScanner scannerWithString:dmixBody];
@@ -2271,6 +2279,37 @@ static NSString *const kMicControl = @"Mic";
         NSString *trimmed = [line stringByTrimmingCharactersInSet:
                              [NSCharacterSet whitespaceCharacterSet]];
 
+        // FORMAT:  S16_LE S24_3LE
+        if ([trimmed hasPrefix:@"FORMAT:"]) {
+            NSString *fmtStr = [trimmed substringFromIndex:7];
+            fmtStr = [fmtStr stringByTrimmingCharactersInSet:
+                      [NSCharacterSet whitespaceCharacterSet]];
+            NSArray *formats = [fmtStr componentsSeparatedByCharactersInSet:
+                                [NSCharacterSet whitespaceCharacterSet]];
+            NSMutableArray *clean = [NSMutableArray array];
+            for (NSString *f in formats) {
+                if ([f length] > 0) [clean addObject:f];
+            }
+            if ([clean count] > 0) {
+                [result setObject:clean forKey:@"formats"];
+            }
+            continue;
+        }
+
+        // CHANNELS: N
+        if ([trimmed hasPrefix:@"CHANNELS:"]) {
+            int ch = [[trimmed substringFromIndex:9] intValue];
+            if (ch > 0) [result setObject:@(ch) forKey:@"channels"];
+            continue;
+        }
+
+        // RATE: N
+        if ([trimmed hasPrefix:@"RATE:"]) {
+            int rate = [[trimmed substringFromIndex:5] intValue];
+            if (rate > 0) [result setObject:@(rate) forKey:@"rate"];
+            continue;
+        }
+
         // PERIOD_SIZE: [min max]
         if ([trimmed hasPrefix:@"PERIOD_SIZE:"]) {
             NSString *range = [trimmed substringFromIndex:12];
@@ -2396,20 +2435,42 @@ static NSString *const kMicControl = @"Mic";
         return [NSString stringWithFormat:@"%@_%d", cid, dev.deviceIndex];
     };
 
-    // Helper: probe capabilities for a device (playback or capture direction)
+    // Helper: probe capabilities for a device (playback or capture direction).
+    // Tries /proc/asound/cardN/stream0 first (USB devices), falls back to
+    // aplay/arecord --dump-hw-params which works for any device.
     NSDictionary *(^probeCaps)(AudioDevice *, NSString *) = ^NSDictionary *(AudioDevice *dev, NSString *direction) {
-        NSDictionary *stream0 = [self parseStream0ForCard:dev.cardIndex];
-        if (!stream0) return nil;
-        NSString *pfx = direction;
-        NSNumber *ch = [stream0 objectForKey:[NSString stringWithFormat:@"%@_channels", pfx]];
-        NSNumber *rate = [stream0 objectForKey:[NSString stringWithFormat:@"%@_rate", pfx]];
-        NSArray *fmts = [stream0 objectForKey:[NSString stringWithFormat:@"%@_formats", pfx]];
-        if (!ch || !rate) return (NSDictionary *)nil;
-        NSMutableDictionary *caps = [NSMutableDictionary dictionary];
-        [caps setObject:ch forKey:@"channels"];
-        [caps setObject:rate forKey:@"rate"];
-        [caps setObject:(fmts ?: @[@"S16_LE"]) forKey:@"formats"];
-        return caps;
+        // Try stream0 first (fast, no tool execution)
+        NSDictionary *caps = [self parseStream0ForCard:dev.cardIndex];
+        if (caps) {
+            NSString *pfx = direction;
+            NSNumber *ch = [caps objectForKey:[NSString stringWithFormat:@"%@_channels", pfx]];
+            NSNumber *rate = [caps objectForKey:[NSString stringWithFormat:@"%@_rate", pfx]];
+            NSArray *fmts = [caps objectForKey:[NSString stringWithFormat:@"%@_formats", pfx]];
+            if (ch && rate) {
+                NSMutableDictionary *result = [NSMutableDictionary dictionary];
+                [result setObject:ch forKey:@"channels"];
+                [result setObject:rate forKey:@"rate"];
+                [result setObject:(fmts ?: @[@"S16_LE"]) forKey:@"formats"];
+                return result;
+            }
+        }
+        // Fallback: use dumpHWParams which works for all devices (non-USB HDA, HDMI)
+        NSDictionary *dump = [self dumpHWParamsForCard:dev.cardIndex
+                                               device:dev.deviceIndex
+                                               stream:direction];
+        if (dump) {
+            NSNumber *ch = [dump objectForKey:@"channels"];
+            NSNumber *rate = [dump objectForKey:@"rate"];
+            NSArray *fmts = [dump objectForKey:@"formats"];
+            if (ch && rate) {
+                NSMutableDictionary *result = [NSMutableDictionary dictionary];
+                [result setObject:ch forKey:@"channels"];
+                [result setObject:rate forKey:@"rate"];
+                [result setObject:(fmts ?: @[@"S16_LE"]) forKey:@"formats"];
+                return result;
+            }
+        }
+        return nil;
     };
 
     // Helper: get hardware constraints for a device direction

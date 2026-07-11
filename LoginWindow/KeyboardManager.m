@@ -339,6 +339,30 @@ static const char *findSetxkbmap(void)
     }
     return NULL;
 }
+static BOOL isConfigFileNewerThanParent(const char *path)
+{
+    struct stat fs, ds;
+    if (stat(path, &fs) != 0) return NO;
+    char parent[4096];
+    snprintf(parent, sizeof(parent), "%s", path);
+    char *slash = strrchr(parent, '/');
+    if (!slash || slash == parent) return NO;
+    *slash = '\0';
+    if (stat(parent, &ds) != 0) return NO;
+    time_t dir_time;
+#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    dir_time = ds.st_birthtime;
+#else
+    dir_time = ds.st_ctime;
+#endif
+    if (dir_time == 0 || (fs.st_mtime >= dir_time && fs.st_ctime >= dir_time)) {
+        return YES;
+    }
+    KbdLog(@"    ⚠ file mtime (%ld) and/or ctime (%ld) older than parent dir creation (%ld) — disregarding as default/stale\n",
+           (long)fs.st_mtime, (long)fs.st_ctime, (long)dir_time);
+    return NO;
+}
+
 static BOOL applyKeyboardToXServer(const char *layout,
                                    const char *variant,
                                    const char *options)
@@ -368,6 +392,10 @@ static BOOL applyKeyboardToXServer(const char *layout,
 static BOOL parseRcConfKeymap(const char **layout, const char **variant)
 {
     KbdLog(@"    Path: /etc/rc.conf\n");
+    if (!isConfigFileNewerThanParent("/etc/rc.conf")) {
+        KbdLog(@"    ✗ file appears to be a package default (not user-configured)\n");
+        return NO;
+    }
     FILE *rc_conf = fopen("/etc/rc.conf", "r");
     if (!rc_conf) {
         KbdLog(@"    ✗ file does not exist or cannot be read\n");
@@ -417,6 +445,10 @@ static BOOL parseEtcDefaultKeyboard(const char **layout,
 {
 #if defined(__linux__)
     KbdLog(@"    Path: /etc/default/keyboard\n");
+    if (!isConfigFileNewerThanParent("/etc/default/keyboard")) {
+        KbdLog(@"    ✗ file appears to be a package default (not user-configured)\n");
+        return NO;
+    }
     static char buf_layout[64], buf_variant[64], buf_options[256];
     FILE *fp = fopen("/etc/default/keyboard", "r");
     if (!fp) {
