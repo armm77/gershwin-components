@@ -355,11 +355,13 @@ static BOOL isConfigFileNewerThanParent(const char *path)
 #else
     dir_time = ds.st_ctime;
 #endif
-    if (dir_time == 0 || (fs.st_mtime >= dir_time && fs.st_ctime >= dir_time)) {
+    if (dir_time == 0) return YES;
+    time_t cutoff = dir_time + 3600;
+    if (fs.st_mtime >= cutoff || fs.st_ctime >= cutoff) {
         return YES;
     }
-    KbdLog(@"    ⚠ file mtime (%ld) and/or ctime (%ld) older than parent dir creation (%ld) — disregarding as default/stale\n",
-           (long)fs.st_mtime, (long)fs.st_ctime, (long)dir_time);
+    KbdLog(@"    ⚠ file mtime (%ld) ctime (%ld) both < dir+1h (%ld) — disregarding as default/stale\n",
+           (long)fs.st_mtime, (long)fs.st_ctime, (long)cutoff);
     return NO;
 }
 
