@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
-#if defined(__linux__)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #include <dirent.h>
 #endif
 #if !defined(__linux__)
@@ -557,12 +557,62 @@ static const char *findEfivar(void)
     }
     return "efivar";
 }
+static void ensureEfivarfsMounted(void)
+{
+#if defined(__linux__)
+    struct stat st;
+    if (stat("/sys/firmware/efi/efivars", &st) != 0 || !S_ISDIR(st.st_mode))
+        return;
+    // Check if already mounted by looking for at least one entry
+    DIR *d = opendir("/sys/firmware/efi/efivars");
+    if (!d) return;
+    int count = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] != '.') { count++; break; }
+    }
+    closedir(d);
+    if (count > 0) return;
+    KbdLog(@"    efivarfs directory empty, attempting mount...\n");
+    if (system("mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null") == 0) {
+        KbdLog(@"    efivarfs mounted successfully\n");
+    } else {
+        KbdLog(@"    efivarfs mount failed (not UEFI or no kernel support)\n");
+    }
+#elif defined(__FreeBSD__)
+    struct stat st;
+    if (stat("/sys/firmware/efi/efivars", &st) != 0 || !S_ISDIR(st.st_mode)) {
+        if (mkdir("/sys/firmware/efi/efivars", 0755) != 0 && errno != EEXIST) {
+            KbdLog(@"    efivarfs: cannot create mountpoint\n");
+            return;
+        }
+    }
+    DIR *d = opendir("/sys/firmware/efi/efivars");
+    if (!d) return;
+    int count = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] != '.') { count++; break; }
+    }
+    closedir(d);
+    if (count > 0) return;
+    KbdLog(@"    efivarfs directory empty, loading module and mounting...\n");
+    system("kldload efivarfs 2>/dev/null");
+    if (system("mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null") == 0) {
+        KbdLog(@"    efivarfs mounted successfully\n");
+    } else {
+        KbdLog(@"    efivarfs mount failed\n");
+    }
+#endif
+}
+
 static BOOL detectKeyboardFromEFI(const char **layout,
                                   const char **variant,
                                   const char **options)
 {
     unsigned char buf[512];
     size_t n;
+    ensureEfivarfsMounted();
     KbdLog(@"    Trying efivarfs...\n");
     FILE *f = fopen("/sys/firmware/efi/efivars/prev-lang:kbd-7c436110-ab2a-4bbb-a880-fe41995c9f82", "rb");
     if (f) {
