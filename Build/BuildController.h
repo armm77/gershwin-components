@@ -22,6 +22,8 @@
     NSPipe *installPipe;
     BOOL installShouldLaunch;
     BWLogWindowController *_logController;
+    NSInteger _totalFileCount;
+    NSInteger _compiledFileCount;
 }
 
 @property (strong) NSString *makefilePath;

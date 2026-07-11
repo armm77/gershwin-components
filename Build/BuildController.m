@@ -463,8 +463,24 @@ static const CGFloat kLineHeight = 18.0;
     }
 
     if (_cancelButton) [_cancelButton setEnabled:YES];
+
+    // Count source files from makefile(s) for progress tracking
+    _totalFileCount = 0;
+    _compiledFileCount = 0;
+    NSString *target = [self productNameFromMakefile];
+    _totalFileCount = [self countSourceFilesInMakefile:makefilePath
+                                                target:target
+                                                 depth:0];
+
     if (_progressBar) {
-        [_progressBar setIndeterminate:YES];
+        if (_totalFileCount > 0) {
+            [_progressBar setIndeterminate:NO];
+            [_progressBar setMinValue:0];
+            [_progressBar setMaxValue:_totalFileCount];
+            [_progressBar setDoubleValue:0];
+        } else {
+            [_progressBar setIndeterminate:YES];
+        }
         [_progressBar startAnimation:nil];
     }
 
@@ -564,6 +580,26 @@ static const CGFloat kLineHeight = 18.0;
         dispatch_async(dispatch_get_main_queue(), ^{
             [_logController appendLog:output];
         });
+
+        if (_totalFileCount > 0) {
+            // Count "Compiling file" lines for progress
+            NSUInteger compiled = 0;
+            NSUInteger pos = 0;
+            while (pos < [output length]) {
+                NSRange r = [output rangeOfString:@"Compiling file "
+                                         options:0
+                                           range:NSMakeRange(pos, [output length] - pos)];
+                if (r.location == NSNotFound) break;
+                compiled++;
+                pos = r.location + r.length;
+            }
+            if (compiled > 0) {
+                _compiledFileCount += compiled;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [_progressBar setDoubleValue:MIN(_compiledFileCount, _totalFileCount)];
+                });
+            }
+        }
 
         [[notification object] readInBackgroundAndNotify];
     }
@@ -860,6 +896,72 @@ static const CGFloat kLineHeight = 18.0;
         }
     }
     return nil;
+}
+
+- (NSInteger)countSourceFilesInMakefile:(NSString *)path
+                                  target:(NSString *)target
+                                   depth:(NSInteger)depth
+{
+    if (depth > 3) return 0;
+    NSString *content = [NSString stringWithContentsOfFile:path
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:NULL];
+    if (!content) return 0;
+
+    // Join backslash continuation lines
+    NSMutableString *joined = [NSMutableString stringWithString:content];
+    [joined replaceOccurrencesOfString:@"\\\n"
+                            withString:@" "
+                               options:0
+                                 range:NSMakeRange(0, [joined length])];
+
+    NSInteger count = 0;
+    NSString *dir = [path stringByDeletingLastPathComponent];
+    NSArray *varNames = @[
+        @"OBJC_FILES", @"OBJCXX_FILES", @"C_FILES", @"CC_FILES",
+        @"CPP_FILES", @"CXX_FILES", @"OBJCPP_FILES"
+    ];
+    NSArray *lines = [joined componentsSeparatedByString:@"\n"];
+
+    for (NSString *line in lines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+
+        // Count source file variables
+        for (NSString *var in varNames) {
+            NSString *prefixed = target ? [NSString stringWithFormat:@"%@_%@", target, var] : nil;
+            if ((prefixed && [trimmed hasPrefix:prefixed]) || [trimmed hasPrefix:var]) {
+                NSString *value = [self parseVariableValue:trimmed];
+                if ([value length] > 0) {
+                    NSArray *parts = [value componentsSeparatedByCharactersInSet:
+                        [NSCharacterSet whitespaceCharacterSet]];
+                    for (NSString *part in parts) {
+                        if ([part length] > 0 && ![part isEqualToString:@"\\"]) {
+                            count++;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Recurse into local includes (skip system includes with $()
+        if ([trimmed hasPrefix:@"include "]) {
+            NSString *incPath = [[trimmed substringFromIndex:8]
+                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if ([incPath hasPrefix:@"$("]) continue;
+            if (![incPath isAbsolutePath]) {
+                incPath = [dir stringByAppendingPathComponent:incPath];
+            }
+            incPath = [incPath stringByStandardizingPath];
+            if ([[NSFileManager defaultManager] fileExistsAtPath:incPath]) {
+                count += [self countSourceFilesInMakefile:incPath
+                                                   target:target
+                                                    depth:depth + 1];
+            }
+        }
+    }
+
+    return count;
 }
 
 - (NSString *)productExtensionFromMakefile
