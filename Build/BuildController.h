@@ -24,6 +24,7 @@
     BWLogWindowController *_logController;
     NSInteger _totalFileCount;
     NSInteger _compiledFileCount;
+    NSString *_objDir;
 }
 
 @property (strong) NSString *makefilePath;

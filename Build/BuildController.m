@@ -455,6 +455,31 @@ static const CGFloat kLineHeight = 18.0;
     NSString *directory = [makefilePath stringByDeletingLastPathComponent];
     if ([directory length] == 0) directory = @".";
 
+    // If source is read-only, copy to a temp directory for building
+    if (access([directory UTF8String], W_OK) != 0) {
+        NSString *template = @"/tmp/Build-XXXXXXXX";
+        char *tmpPath = strdup([template UTF8String]);
+        if (mkdtemp(tmpPath)) {
+            _objDir = [[NSString stringWithUTF8String:tmpPath] stringByStandardizingPath];
+
+            if (_statusField) [_statusField setStringValue:@"Copying source to temp directory…"];
+
+            NSTask *cpTask = [[NSTask alloc] init];
+            [cpTask setLaunchPath:@"/bin/cp"];
+            [cpTask setArguments:@[@"-a", directory, _objDir]];
+            [cpTask launch];
+            [cpTask waitUntilExit];
+
+            NSString *srcName = [directory lastPathComponent];
+            NSString *destDir = [_objDir stringByAppendingPathComponent:srcName];
+            directory = destDir;
+            makefilePath = [destDir stringByAppendingPathComponent:
+                [makefilePath lastPathComponent]];
+            self.makefilePath = makefilePath;
+        }
+        free(tmpPath);
+    }
+
     NSString *makePath = [self resolveMakePath];
     if (!makePath) {
         if (_statusField) [_statusField setStringValue:@"Error: neither gmake nor make found in PATH"];
@@ -684,6 +709,7 @@ static const CGFloat kLineHeight = 18.0;
         [self startInstallWithLaunch:NO];
     } else if (status == 0) {
         NSLog(@"buildFinished: OK -> quit");
+        [self cleanupTempDir];
         [NSApp stop:self];
         [NSApp terminate:self];
     } else if (status != 0 && button == NSAlertSecondButtonReturn) {
@@ -691,6 +717,7 @@ static const CGFloat kLineHeight = 18.0;
         [self showLog:nil];
     } else if (status != 0 && button == NSAlertFirstButtonReturn) {
         NSLog(@"buildFinished: Cancel -> quit");
+        [self cleanupTempDir];
         [NSApp stop:self];
         [NSApp terminate:self];
     }
@@ -819,6 +846,7 @@ static const CGFloat kLineHeight = 18.0;
             [self showLog:nil];
             return;
         }
+        [self cleanupTempDir];
         [NSApp stop:self];
         [NSApp terminate:self];
         return;
@@ -868,6 +896,7 @@ static const CGFloat kLineHeight = 18.0;
         [alert runModal];
     }
 
+    [self cleanupTempDir];
     [NSApp terminate:self];
 }
 
@@ -1173,10 +1202,19 @@ static const CGFloat kLineHeight = 18.0;
         [NSCharacterSet whitespaceCharacterSet]];
 }
 
+- (void)cleanupTempDir
+{
+    if (_objDir) {
+        [[NSFileManager defaultManager] removeItemAtPath:_objDir error:NULL];
+        _objDir = nil;
+    }
+}
+
 - (void)windowWillClose:(NSNotification *)notification
 {
     NSWindow *closingWindow = [notification object];
     if (closingWindow == _window) {
+        [self cleanupTempDir];
         if (buildTask && [buildTask isRunning]) {
             [buildTask terminate];
         }
