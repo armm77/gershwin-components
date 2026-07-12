@@ -538,23 +538,13 @@ static const CGFloat kSpace16 = 16.0;
 
     if (_cancelButton) [_cancelButton setEnabled:YES];
 
-    // Count source files from makefile(s) for progress tracking
-    _totalFileCount = 0;
-    _compiledFileCount = 0;
-    NSString *target = [self productNameFromMakefile];
-    _totalFileCount = [self countSourceFilesInMakefile:makefilePath
-                                                target:target
-                                                 depth:0];
+    // Initialize per-project progress tracking
+    _projectFileCounts = [[NSMutableArray alloc] init];
+    _projectCompiledCounts = [[NSMutableArray alloc] init];
+    _currentProjectIndex = -1;
 
     if (_progressBar) {
-        if (_totalFileCount > 0) {
-            [_progressBar setIndeterminate:NO];
-            [_progressBar setMinValue:0];
-            [_progressBar setMaxValue:_totalFileCount];
-            [_progressBar setDoubleValue:0];
-        } else {
-            [_progressBar setIndeterminate:YES];
-        }
+        [_progressBar setIndeterminate:YES];
         [_progressBar startAnimation:nil];
     }
 
@@ -562,6 +552,23 @@ static const CGFloat kSpace16 = 16.0;
 
     // Resolve GNUstep dependencies before building
     [self resolveDependenciesBeforeBuildInDirectory:directory];
+
+    // Add main project as last progress segment
+    NSString *mainTarget = [self productNameFromMakefile];
+    NSInteger mainCount = [self countSourceFilesInMakefile:makefilePath
+                                                    target:mainTarget
+                                                     depth:0];
+    [_projectFileCounts addObject:@(mainCount)];
+    [_projectCompiledCounts addObject:@(0)];
+    _currentProjectIndex = [_projectFileCounts count] - 1;
+
+    if (_progressBar) {
+        NSUInteger totalProjects = [_projectFileCounts count];
+        [_progressBar setIndeterminate:NO];
+        [_progressBar setMinValue:0];
+        [_progressBar setMaxValue:totalProjects];
+        [_progressBar setDoubleValue:_currentProjectIndex];
+    }
 
     NSString *dName = [self displayNameFromMakefile];
     if (_statusField) {
@@ -739,7 +746,7 @@ static const CGFloat kSpace16 = 16.0;
             [_logController appendLog:output];
         });
 
-        if (_totalFileCount > 0) {
+        if ([_projectFileCounts count] > 0) {
             // Count "Compiling file" lines for progress
             NSUInteger compiled = 0;
             NSUInteger pos = 0;
@@ -752,9 +759,13 @@ static const CGFloat kSpace16 = 16.0;
                 pos = r.location + r.length;
             }
             if (compiled > 0) {
-                _compiledFileCount += compiled;
+                NSInteger curTotal = [_projectFileCounts[_currentProjectIndex] integerValue];
+                NSInteger curCompiled = [_projectCompiledCounts[_currentProjectIndex] integerValue] + compiled;
+                if (curCompiled > curTotal) curCompiled = curTotal;
+                _projectCompiledCounts[_currentProjectIndex] = @(curCompiled);
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [_progressBar setDoubleValue:MIN(_compiledFileCount, _totalFileCount)];
+                    double fraction = (curTotal > 0) ? (double)curCompiled / curTotal : 1.0;
+                    [_progressBar setDoubleValue:_currentProjectIndex + fraction];
                 });
             }
         }
@@ -823,7 +834,7 @@ static const CGFloat kSpace16 = 16.0;
     NSString *dName = [self displayNameFromMakefile];
 
     if (status == 0) {
-        [_progressBar setDoubleValue:100.0];
+        [_progressBar setDoubleValue:[_progressBar maxValue]];
         [_statusField setStringValue:dName ? [NSString stringWithFormat:@"%@ built successfully", dName] : @"Build completed successfully"];
         [_window setTitle:dName ? dName : @"Build"];
     } else {
@@ -1950,17 +1961,22 @@ static const CGFloat kSpace16 = 16.0;
         [buildEnv setObject:depLdFlags forKey:@"ADDITIONAL_LDFLAGS"];
     }
 
-    // Count this dependency's source files for progress tracking
+    // Add this dependency to progress tracking
     NSString *depTarget = [self productNameFromMakefile:depMf];
     NSInteger depCount = [self countSourceFilesInMakefile:depMf
                                                    target:depTarget
                                                     depth:0];
-    if (depCount > 0) {
-        _totalFileCount += depCount;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [_progressBar setMaxValue:_totalFileCount];
-        });
-    }
+    [_projectFileCounts addObject:@(depCount)];
+    [_projectCompiledCounts addObject:@(0)];
+    _currentProjectIndex = [_projectFileCounts count] - 1;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSUInteger n = [_projectFileCounts count];
+        [_progressBar setIndeterminate:NO];
+        [_progressBar setMinValue:0];
+        [_progressBar setMaxValue:n];
+        [_progressBar setDoubleValue:_currentProjectIndex];
+    });
 
     NSPipe *bOut = [NSPipe pipe];
     NSPipe *bErr = [NSPipe pipe];
@@ -1998,9 +2014,13 @@ static const CGFloat kSpace16 = 16.0;
             pos = r.location + r.length;
         }
         if (compiled > 0) {
-            _compiledFileCount += compiled;
             dispatch_async(dispatch_get_main_queue(), ^{
-                [_progressBar setDoubleValue:MIN(_compiledFileCount, _totalFileCount)];
+                NSInteger curTotal = [_projectFileCounts[_currentProjectIndex] integerValue];
+                NSInteger curCompiled = [_projectCompiledCounts[_currentProjectIndex] integerValue] + compiled;
+                if (curCompiled > curTotal) curCompiled = curTotal;
+                _projectCompiledCounts[_currentProjectIndex] = @(curCompiled);
+                double fraction = (curTotal > 0) ? (double)curCompiled / curTotal : 1.0;
+                [_progressBar setDoubleValue:_currentProjectIndex + fraction];
             });
         }
     }

@@ -24,8 +24,9 @@
     BWLogWindowController *_logController;
     NSImageView *_iconView;
     NSTextField *_nameField;
-    NSInteger _totalFileCount;
-    NSInteger _compiledFileCount;
+    NSMutableArray *_projectFileCounts;
+    NSMutableArray *_projectCompiledCounts;
+    NSInteger _currentProjectIndex;
     NSString *_objDir;
     BOOL _dependencyResolved;
 }
