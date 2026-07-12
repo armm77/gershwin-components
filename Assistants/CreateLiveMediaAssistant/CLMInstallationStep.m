@@ -77,14 +77,26 @@
     [_progressBar setDoubleValue:0.0];
     [_stepView addSubview:_progressBar];
 
-    _progressLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 94, 330, 18)];
-    [_progressLabel setStringValue:NSLocalizedString(@"", @"")];
+    _etaLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(32, 92, 290, 18)];
+    [_etaLabel setStringValue:@""];
+    [_etaLabel setAlignment:NSCenterTextAlignment];
+    [_etaLabel setBezeled:NO];
+    [_etaLabel setDrawsBackground:NO];
+    [_etaLabel setEditable:NO];
+    [_etaLabel setSelectable:NO];
+    [_etaLabel setFont:[NSFont systemFontOfSize:11]];
+    [_etaLabel setTextColor:[NSColor grayColor]];
+    [_stepView addSubview:_etaLabel];
+
+    _progressLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(32, 66, 290, 18)];
+    [_progressLabel setStringValue:@""];
     [_progressLabel setAlignment:NSCenterTextAlignment];
     [_progressLabel setBezeled:NO];
     [_progressLabel setDrawsBackground:NO];
     [_progressLabel setEditable:NO];
     [_progressLabel setSelectable:NO];
-    [_progressLabel setFont:[NSFont systemFontOfSize:11]];
+    [_progressLabel setFont:[NSFont systemFontOfSize:10]];
+    [_progressLabel setTextColor:[NSColor grayColor]];
     [_stepView addSubview:_progressLabel];
 
 }
@@ -133,10 +145,16 @@
     }
 
     CLMStreamContentType contentType = [CLMStreamOperation contentTypeForURL:url];
-    if (contentType == CLMStreamContentTypeCompressed) {
-        [_statusLabel setStringValue:NSLocalizedString(@"Downloading, decompressing and writing image...", @"")];
+    NSString *fname = [_controller.selectedImageName lastPathComponent];
+    if ([[url scheme] isEqualToString:@"file"]) {
+        [_statusLabel setStringValue:[NSString stringWithFormat:
+            NSLocalizedString(@"Writing %@...", @""), fname]];
+    } else if (contentType == CLMStreamContentTypeCompressed) {
+        [_statusLabel setStringValue:[NSString stringWithFormat:
+            NSLocalizedString(@"Downloading, decompressing and writing %@...", @""), fname]];
     } else {
-        [_statusLabel setStringValue:NSLocalizedString(@"Downloading and writing image...", @"")];
+        [_statusLabel setStringValue:[NSString stringWithFormat:
+            NSLocalizedString(@"Downloading and writing %@...", @""), fname]];
     }
 
     _streamOp = [[CLMStreamOperation alloc] initWithURL:url devicePath:devicePath];
@@ -166,46 +184,56 @@
     [_progressBar setDoubleValue:percent];
     [_progressBar setNeedsDisplay:YES];
 
+    // Data downloaded label
+    NSString *dataStr = @"";
     if (total > 0 && bytes > 0) {
-        NSTimeInterval elapsed = now - _downloadStartTime;
-        double speed = (double)bytes / elapsed;
-        double remaining = (double)(total - bytes) / speed;
-        int etaSec = (int)remaining;
-
-        NSString *etaStr;
-        if (etaSec >= 3600) {
-            etaStr = [NSString stringWithFormat:@"%d:%02d:%02d", etaSec / 3600, (etaSec % 3600) / 60, etaSec % 60];
-        } else {
-            etaStr = [NSString stringWithFormat:@"%d:%02d", etaSec / 60, etaSec % 60];
-        }
-
-        NSString *speedStr;
-        if (speed >= 1073741824.0) {
-            speedStr = [NSString stringWithFormat:@"%.1f GB/s", speed / 1073741824.0];
-        } else if (speed >= 1048576.0) {
-            speedStr = [NSString stringWithFormat:@"%.1f MB/s", speed / 1048576.0];
-        } else if (speed >= 1024.0) {
-            speedStr = [NSString stringWithFormat:@"%.0f KB/s", speed / 1024.0];
-        } else {
-            speedStr = [NSString stringWithFormat:@"%.0f B/s", speed];
-        }
-
         NSString *receivedStr = [CLMDiskUtility formatSize:bytes];
         NSString *totalStr = [CLMDiskUtility formatSize:total];
-        [_progressLabel setStringValue:[NSString stringWithFormat:
-                                           NSLocalizedString(@"%@ of %@ - %@, ETA %@", @""),
-                                           receivedStr, totalStr, speedStr, etaStr]];
-    } else if (total > 0) {
-        NSString *receivedStr = [CLMDiskUtility formatSize:bytes];
-        NSString *totalStr = [CLMDiskUtility formatSize:total];
-        [_progressLabel setStringValue:[NSString stringWithFormat:
-                                           NSLocalizedString(@"%@ of %@", @""),
-                                           receivedStr, totalStr]];
+        dataStr = [NSString stringWithFormat:NSLocalizedString(@"%@ of %@", @""),
+                          receivedStr, totalStr];
     } else if (bytes > 0) {
         NSString *receivedStr = [CLMDiskUtility formatSize:bytes];
-        [_progressLabel setStringValue:[NSString stringWithFormat:
-                                           NSLocalizedString(@"%@ received", @""),
-                                           receivedStr]];
+        dataStr = [NSString stringWithFormat:NSLocalizedString(@"%@ received", @""),
+                           receivedStr];
+    }
+    [_progressLabel setStringValue:dataStr];
+
+    // ETA label using InstallationAssistant-style wording
+    if (total > 0 && bytes > 0) {
+        NSTimeInterval elapsed = now - _downloadStartTime;
+        double pct = (double)bytes / (double)total * 100.0;
+
+        if (pct < 2.0 || elapsed < 10.0) {
+            [_etaLabel setStringValue:NSLocalizedString(@"Estimating time remaining...", @"")];
+        } else {
+            double rate = pct / elapsed;
+            if (rate < 0.001) {
+                [_etaLabel setStringValue:NSLocalizedString(@"Estimating time remaining...", @"")];
+            } else {
+                double remaining = (100.0 - pct) / rate;
+                int secs = (int)remaining;
+
+                NSString *etaStr;
+                if (secs > 7200) {
+                    int hours = secs / 3600;
+                    int mins = (secs % 3600) / 60;
+                    etaStr = [NSString stringWithFormat:
+                        NSLocalizedString(@"About %d hours and %d minutes remaining", @""),
+                        hours, mins];
+                } else if (secs > 120) {
+                    int mins = (secs + 30) / 60;
+                    etaStr = [NSString stringWithFormat:
+                        NSLocalizedString(@"About %d minutes remaining", @""), mins];
+                } else if (secs > 60) {
+                    etaStr = NSLocalizedString(@"About a minute remaining", @"");
+                } else {
+                    etaStr = NSLocalizedString(@"Less than a minute remaining", @"");
+                }
+                [_etaLabel setStringValue:etaStr];
+            }
+        }
+    } else {
+        [_etaLabel setStringValue:@""];
     }
 }
 

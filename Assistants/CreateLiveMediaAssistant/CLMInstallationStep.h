@@ -18,6 +18,7 @@
     NSProgressIndicator *_progressBar;
     NSTextField *_statusLabel;
     NSTextField *_progressLabel;
+    NSTextField *_etaLabel;
     NSTextField *_infoLabel;
     BOOL _installationInProgress;
     BOOL _installationCompleted;

@@ -31,6 +31,7 @@
     IAConfirmStep *_confirmStep;
     GSAssistantWindow *_assistantWindow;
     IALogWindowController *_logWindowController;
+    BOOL _installSucceeded;
 }
 @end
 
@@ -47,17 +48,18 @@
 
 - (void)assistantWindowDidFinish:(GSAssistantWindow *)window {
     (void)window;
-    /* The user clicked Restart on the completion step - execute shutdown -r now */
-    NSDebugLLog(@"gwcomp", @"InstallationDelegate: assistantWindowDidFinish - restarting system");
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:@"/usr/bin/env"];
-    [task setArguments:@[@"sudo", @"shutdown", @"-r", @"now"]];
-    @try {
-        [task launch];
-    } @catch (NSException *ex) {
-        NSDebugLLog(@"gwcomp", @"InstallationDelegate: restart failed: %@", ex);
+    if (_installSucceeded) {
+        NSDebugLLog(@"gwcomp", @"InstallationDelegate: assistantWindowDidFinish - restarting system");
+        NSTask *task = [[NSTask alloc] init];
+        [task setLaunchPath:@"/usr/bin/env"];
+        [task setArguments:@[@"sudo", @"shutdown", @"-r", @"now"]];
+        @try {
+            [task launch];
+        } @catch (NSException *ex) {
+            NSDebugLLog(@"gwcomp", @"InstallationDelegate: restart failed: %@", ex);
+        }
+        [task release];
     }
-    [task release];
     [NSApp terminate:nil];
 }
 
@@ -114,12 +116,23 @@
 
 - (void)installProgressDidFinish:(BOOL)success {
     NSDebugLLog(@"gwcomp", @"InstallationDelegate: installation finished, success=%d", success);
+    _installSucceeded = success;
     if (success && _assistantWindow) {
-        /* Auto-advance to the framework's completion step (green checkmark) */
         [_assistantWindow goToNextStep];
     } else if (!success && _assistantWindow) {
-        /* Enable Continue so user can proceed to the error completion step */
-        [_assistantWindow updateNavigationButtons];
+        NSString *msg = NSLocalizedString(
+            @"An error occurred during installation.\n\nPlease check the log for details.",
+            @"");
+        GSCompletionStep *errorStep = [[GSCompletionStep alloc]
+            initWithCompletionMessage:msg success:NO];
+        errorStep.title = NSLocalizedString(@"Installation Failed", @"");
+        errorStep.customContinueTitle = NSLocalizedString(@"Close", @"");
+        errorStep.hideNavigationButtons = NO;
+
+        [_assistantWindow.steps removeAllObjects];
+        [_assistantWindow addStep:errorStep];
+        [_assistantWindow goToStepAtIndex:0];
+        [errorStep release];
     }
 }
 
@@ -229,22 +242,25 @@ int main(int argc, const char *argv[]) {
 
         InstallationDelegate *delegate = [[InstallationDelegate alloc] init];
         
-        /* Check for image-based installation source before building UI */
+        /* Normally we would check for an image-based installation source here and
+         * offer a page to choose between clone and image mode, but it is
+         * temporarily disabled.  The code is left commented out for future use. */
+        /*
         NSString *imageSource = IACheckImageSourceAvailable();
         BOOL imageAvailable = (imageSource != nil && [imageSource length] > 0);
         NSDebugLLog(@"gwcomp", @"Image source available: %@ (%@)", imageAvailable ? @"YES" : @"NO",
               imageSource ?: @"none");
-        
-        IAWelcomeStep *welcomeStep = [[IAWelcomeStep alloc] init];
-        IALicenseStep *licenseStep = nil;
-        if ([GSLocalizedContentManager hasLicenseContent]) {
-            licenseStep = [[IALicenseStep alloc] init];
-        }
         IAInstallTypeStep *installTypeStep = nil;
         if (imageAvailable) {
             installTypeStep = [[IAInstallTypeStep alloc] init];
             [installTypeStep setDelegate:delegate];
             [installTypeStep setImageSource:imageSource];
+        }
+        */
+        IAWelcomeStep *welcomeStep = [[IAWelcomeStep alloc] init];
+        IALicenseStep *licenseStep = nil;
+        if ([GSLocalizedContentManager hasLicenseContent]) {
+            licenseStep = [[IALicenseStep alloc] init];
         }
         IADiskSelectionStep *diskStep = [[IADiskSelectionStep alloc] init];
         IAConfirmStep *confirmStep = [[IAConfirmStep alloc] init];
@@ -283,9 +299,11 @@ int main(int argc, const char *argv[]) {
         if (licenseStep) {
             [builder addStep:licenseStep];
         }
+        /*
         if (installTypeStep) {
             [builder addStep:installTypeStep];
         }
+        */
         [builder addStep:diskStep];
         [builder addStep:confirmStep];
         [builder addStep:progressStep];

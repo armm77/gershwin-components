@@ -466,17 +466,23 @@ done
 # POSIX-safe cp -a with excludes using rsync if available, else fallback to find+cp
 if command -v rsync >/dev/null 2>&1; then
     # shellcheck disable=SC2086
-    rsync -aHAX --info=progress2 $EXCLUDE_ARGS "${SRC%/}/" "$MNT" 2>&1 | \
-    while IFS= read -r line; do
-        echo "$line"
-        # Parse rsync progress output for percentage
-        pct=$(echo "$line" | sed -n 's/.*[[:space:]]\([0-9]*\)%.*/\1/p')
-        if [ -n "$pct" ]; then
-            # Scale rsync 0-100% to our 25-80% range
-            scaled=$(awk -v p="$pct" 'BEGIN { printf "%d", 25 + (p * 55 / 100) }')
-            report_progress "Copying" "$scaled" "Copying files with rsync... ${pct}%"
-        fi
-    done
+    rsync_pipe=/tmp/rsync_pipe.$$
+    if mkfifo "$rsync_pipe" 2>/dev/null; then
+        rsync -aHAX --info=progress2 $EXCLUDE_ARGS "${SRC%/}/" "$MNT" > "$rsync_pipe" 2>&1 &
+        rsync_pid=$!
+        while IFS= read -r line; do
+            echo "$line"
+            pct=$(echo "$line" | sed -n 's/.*[[:space:]]\([0-9]*\)%.*/\1/p')
+            if [ -n "$pct" ]; then
+                scaled=$(awk -v p="$pct" 'BEGIN { printf "%d", 25 + (p * 55 / 100) }')
+                report_progress "Copying" "$scaled" "Copying files with rsync... ${pct}%"
+            fi
+        done < "$rsync_pipe"
+        wait "$rsync_pid"
+        rm -f "$rsync_pipe"
+    else
+        rsync -aHAX --info=progress2 $EXCLUDE_ARGS "${SRC%/}/" "$MNT"
+    fi
 else
     # fallback
     report_progress "Copying" 30 "Copying files..."
