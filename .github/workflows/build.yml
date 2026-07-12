@@ -51,8 +51,8 @@ jobs:
             BASE="$(pwd)"
             git clone --depth 1 https://github.com/gershwin-desktop/gershwin-developer.git
             cd "$BASE/gershwin-developer"
-            ./Library/Scripts/Bootstrap.sh
-            SKIP_REPOS="${{ env.SKIP_REPOS }}" ./Library/Scripts/Checkout.sh
+            ./Library/Scripts/bootstrap.sh
+            SKIP_REPOS="${{ env.SKIP_REPOS }}" ./Library/Scripts/checkout.sh
             ln -sfn "$BASE/gershwin-components" Library/Sources/gershwin-components
             make corelibs
             make systempreferences
@@ -79,11 +79,11 @@ jobs:
 
       - name: Bootstrap
         working-directory: gershwin-developer
-        run: ./Library/Scripts/Bootstrap.sh
+        run: ./Library/Scripts/bootstrap.sh
 
       - name: Checkout sources (skip this repo and sibling apps)
         working-directory: gershwin-developer
-        run: ./Library/Scripts/Checkout.sh
+        run: ./Library/Scripts/checkout.sh
 
       - name: Link source under test
         working-directory: gershwin-developer
@@ -122,11 +122,11 @@ jobs:
 
       - name: Bootstrap
         working-directory: gershwin-developer
-        run: ./Library/Scripts/Bootstrap.sh
+        run: ./Library/Scripts/bootstrap.sh
 
       - name: Checkout sources (skip this repo and sibling apps)
         working-directory: gershwin-developer
-        run: ./Library/Scripts/Checkout.sh
+        run: ./Library/Scripts/checkout.sh
 
       - name: Link source under test
         working-directory: gershwin-developer
@@ -169,8 +169,8 @@ jobs:
             BASE="$(pwd)"
             git clone --depth 1 https://github.com/gershwin-desktop/gershwin-developer.git
             cd "$BASE/gershwin-developer"
-            ./Library/Scripts/Bootstrap.sh
-            SKIP_REPOS="${{ env.SKIP_REPOS }}" ./Library/Scripts/Checkout.sh
+            ./Library/Scripts/bootstrap.sh
+            SKIP_REPOS="${{ env.SKIP_REPOS }}" ./Library/Scripts/checkout.sh
             ln -sfn "$BASE/gershwin-components" Library/Sources/gershwin-components
             make corelibs
             make systempreferences
