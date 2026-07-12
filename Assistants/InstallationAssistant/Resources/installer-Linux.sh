@@ -506,11 +506,11 @@ if command -v rsync >/dev/null 2>&1; then
         if [ -n "$pct" ]; then
             # Scale rsync 0-100% to our 25-80% range
             scaled=$(awk -v p="$pct" 'BEGIN { printf "%d", 25 + (p * 55 / 100) }')
-            report_progress "Copying" "$scaled" "Copying files... ${pct}%"
+            report_progress "Copying" "$scaled" "Copying files with rsync... ${pct}%"
         fi
     done
 else
-    report_progress "Copying" 30 "Copying files (fallback mode)..."
+    report_progress "Copying" 30 "Copying files..."
     echo "rsync not found, using cp -ax..."
     # cp -ax is the best POSIX fallback for cloning
     cp -ax "${SRC%/}/." "$MNT/"
