@@ -447,7 +447,7 @@ report_progress "Copying" 25 "Starting system copy from $SRC..."
 echo "Copying system from $SRC to $MNT..."
 
 # Exclude runtime dirs
-EXCLUDES="dev proc sys tmp mnt media efi run var/run var/tmp var/cache compat"
+EXCLUDES="dev proc sys tmp mnt media efi private run var/run var/tmp var/cache compat"
 
 # For non-image installations, also exclude /Local (it will be initialized with dscli init
 # because DirectoryServices requires specific permissions and ownership that are hard to preserve during copying)
