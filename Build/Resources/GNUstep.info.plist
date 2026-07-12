@@ -1,0 +1,368 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Core base library -->
+    <key>libs-base</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>Foundation</string>
+            <string>CoreFoundation</string>
+            <string>GNUstepBase</string>
+        </array>
+    </dict>
+
+    <!-- GUI library -->
+    <key>libs-gui</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>AppKit</string>
+            <string>gnustep/gui</string>
+        </array>
+    </dict>
+
+    <!-- Web services -->
+    <key>libs-webservices</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>WebServices</string>
+        </array>
+    </dict>
+
+    <!-- Web server -->
+    <key>libs-webserver</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>WebServer</string>
+        </array>
+    </dict>
+
+    <!-- Audio toolbox -->
+    <key>libs-audiotoolbox</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>AudioToolbox</string>
+        </array>
+    </dict>
+
+    <!-- Core base (standalone) -->
+    <key>libs-corebase</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>CoreBase</string>
+        </array>
+    </dict>
+
+    <!-- Core image -->
+    <key>libs-coreimage</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>CoreImage</string>
+        </array>
+    </dict>
+
+    <!-- Core network -->
+    <key>libs-corenetwork</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>CoreNetwork</string>
+        </array>
+    </dict>
+
+    <!-- DBusKit -->
+    <key>libs-dbuskit</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>DBusKit</string>
+        </array>
+    </dict>
+
+    <!-- Addresses / EC -->
+    <key>libs-ec</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>EC</string>
+        </array>
+    </dict>
+
+    <!-- GDL2 -->
+    <key>libs-gdl2</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>GDL2</string>
+        </array>
+    </dict>
+
+    <!-- GSCrypt -->
+    <key>libs-gscrypt</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>GSCrypt</string>
+        </array>
+    </dict>
+
+    <!-- GSWeb -->
+    <key>libs-gsweb</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>GSWeb</string>
+        </array>
+    </dict>
+
+    <!-- Guile -->
+    <key>libs-guile</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>Guile</string>
+        </array>
+    </dict>
+
+    <!-- Java bridge -->
+    <key>libs-java</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>Java</string>
+        </array>
+    </dict>
+
+    <!-- Opal -->
+    <key>libs-opal</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>Opal</string>
+        </array>
+    </dict>
+
+    <!-- Palettes -->
+    <key>libs-palettes</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>Palettes</string>
+        </array>
+    </dict>
+
+    <!-- Performance -->
+    <key>libs-performance</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>Performance</string>
+        </array>
+    </dict>
+
+    <!-- PPD -->
+    <key>libs-ppd</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>PPD</string>
+        </array>
+    </dict>
+
+    <!-- QuartzCore -->
+    <key>libs-quartzcore</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>QuartzCore</string>
+        </array>
+    </dict>
+
+    <!-- Renaissance -->
+    <key>libs-renaissance</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>Renaissance</string>
+        </array>
+    </dict>
+
+    <!-- Ruby bridge -->
+    <key>libs-ruby</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>Ruby</string>
+        </array>
+    </dict>
+
+    <!-- SimpleWebKit -->
+    <key>libs-simplewebkit</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>SimpleWebKit</string>
+        </array>
+    </dict>
+
+    <!-- SMBKit -->
+    <key>libs-smbkit</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>SMBKit</string>
+        </array>
+    </dict>
+
+    <!-- SQLClient -->
+    <key>libs-sqlclient</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>SQLClient</string>
+        </array>
+    </dict>
+
+    <!-- StepTalk -->
+    <key>libs-steptalk</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>StepTalk</string>
+        </array>
+    </dict>
+
+    <!-- Xcode bridge -->
+    <key>libs-xcode</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>Xcode</string>
+        </array>
+    </dict>
+
+    <!-- MICA -->
+    <key>libs-mica</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>MICA</string>
+        </array>
+    </dict>
+
+    <!-- SysConfig -->
+    <key>libs-sysconfig</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>SysConfig</string>
+        </array>
+    </dict>
+
+    <!-- UCSData -->
+    <key>libs-ucsdata</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>UCSData</string>
+        </array>
+    </dict>
+
+    <!-- GSCoreData -->
+    <key>libs-gscoredata</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>GSCoreData</string>
+        </array>
+    </dict>
+
+    <!-- Boron -->
+    <key>libs-boron</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>Boron</string>
+        </array>
+    </dict>
+
+    <!-- GSPS -->
+    <key>libs-gsps</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>GSPS</string>
+        </array>
+    </dict>
+
+    <!-- BuildKit -->
+    <key>libs-buildkit</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>BuildKit</string>
+        </array>
+    </dict>
+
+    <!-- WebKitCEF -->
+    <key>libs-webkitcef</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>WebKitCEF</string>
+        </array>
+    </dict>
+
+    <!-- AVFoundation -->
+    <key>libs-av</key>
+    <dict>
+        <key>org</key><string>gnustep</string>
+        <key>headers</key>
+        <array>
+            <string>AVFoundation</string>
+        </array>
+    </dict>
+</dict>
+</plist>

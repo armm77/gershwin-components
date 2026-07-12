@@ -1950,6 +1950,18 @@ static const CGFloat kSpace16 = 16.0;
         [buildEnv setObject:depLdFlags forKey:@"ADDITIONAL_LDFLAGS"];
     }
 
+    // Count this dependency's source files for progress tracking
+    NSString *depTarget = [self productNameFromMakefile:depMf];
+    NSInteger depCount = [self countSourceFilesInMakefile:depMf
+                                                   target:depTarget
+                                                    depth:0];
+    if (depCount > 0) {
+        _totalFileCount += depCount;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [_progressBar setMaxValue:_totalFileCount];
+        });
+    }
+
     NSPipe *bOut = [NSPipe pipe];
     NSPipe *bErr = [NSPipe pipe];
 
@@ -1973,6 +1985,24 @@ static const CGFloat kSpace16 = 16.0;
         NSString *outStr = [[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding];
         [_logController appendLog:outStr];
         write(STDOUT_FILENO, [outData bytes], [outData length]);
+
+        // Count "Compiling file" lines for progress tracking
+        NSUInteger compiled = 0;
+        NSUInteger pos = 0;
+        while (pos < [outStr length]) {
+            NSRange r = [outStr rangeOfString:@"Compiling file "
+                                     options:0
+                                       range:NSMakeRange(pos, [outStr length] - pos)];
+            if (r.location == NSNotFound) break;
+            compiled++;
+            pos = r.location + r.length;
+        }
+        if (compiled > 0) {
+            _compiledFileCount += compiled;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [_progressBar setDoubleValue:MIN(_compiledFileCount, _totalFileCount)];
+            });
+        }
     }
     NSData *errData = [[bErr fileHandleForReading] readDataToEndOfFile];
     if ([errData length] > 0) {
