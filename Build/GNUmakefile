@@ -18,6 +18,7 @@ Build_APPLICATION_ICON = Build.png
 Build_RESOURCE_FILES = \
 	Resources/check.png \
 	Resources/Blacklist.plist \
+	Resources/GNUstep.info.plist \
 	Info-gnustep.plist
 
 include $(GNUSTEP_MAKEFILES)/application.make

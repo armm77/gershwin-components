@@ -115,6 +115,8 @@ static const CGFloat kSpace16 = 16.0;
 
 @interface BuildController ()
 @property (strong) NSArray *blacklist;
+@property (strong, nonatomic) NSDictionary *gnustepInfo;
+@property (strong) NSString *pendingLibrary;
 - (BOOL)isItemBlacklisted:(NSString *)item;
 @end
 
@@ -293,6 +295,7 @@ static const CGFloat kSpace16 = 16.0;
 
 - (void)showWindow
 {
+    NSLog(@"showWindow: DISPLAY=%s makefilePath=%@", getenv("DISPLAY"), makefilePath);
     if (!getenv("DISPLAY")) {
         if (makefilePath) {
             [self startBuild];
@@ -300,10 +303,13 @@ static const CGFloat kSpace16 = 16.0;
         return;
     }
 
+    NSLog(@"showWindow: calling setupMenu");
     [self setupMenu];
 
     if (makefilePath) {
+        NSLog(@"showWindow: calling createProgressWindow");
         [self createProgressWindow];
+        NSLog(@"showWindow: calling startBuild");
         [self startBuild];
     } else {
         [self showFileOpenDialog];
@@ -554,13 +560,17 @@ static const CGFloat kSpace16 = 16.0;
 
     [self runPrebuildStepsInDirectory:directory];
 
+    // Resolve GNUstep dependencies before building
+    [self resolveDependenciesBeforeBuildInDirectory:directory];
+
     NSString *dName = [self displayNameFromMakefile];
     if (_statusField) {
         [_statusField setStringValue:dName ? [NSString stringWithFormat:@"Building %@…", dName] : @"Building…"];
     }
     if (_window) [_window setTitle:dName ? [NSString stringWithFormat:@"Building %@", dName] : @"Building…"];
     else fprintf(stderr, "Building…\n");
-    [_logController appendLog:@"=== Build started ===\n"];
+    [_logController appendLog:[NSString stringWithFormat:@"=== Build started in %@ ===\n", directory]];
+    NSLog(@"build: directory=%@ makefilePath=%@", directory, makefilePath);
 
     buildTask = [[NSTask alloc] init];
     [buildTask setCurrentDirectoryPath:directory];
@@ -571,7 +581,84 @@ static const CGFloat kSpace16 = 16.0;
     }
     [taskArgs addObject:@"all"];
     [buildTask setArguments:taskArgs];
-    [buildTask setEnvironment:[[NSProcessInfo processInfo] environment]];
+
+    // Add dependency include/lib paths to build command (reliable approach)
+    NSString *depDir = [directory stringByAppendingPathComponent:@"GNUstepDependencies"];
+    if (_dependencyResolved) {
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSArray *subs = [fm contentsOfDirectoryAtPath:depDir error:NULL];
+        if (subs) {
+            NSMutableString *cppFlags = [NSMutableString string];
+            NSMutableString *ldFlags = [NSMutableString string];
+            NSMutableString *guiLibs = [NSMutableString string];
+            for (NSString *sub in subs) {
+                NSString *libDir = [depDir stringByAppendingPathComponent:sub];
+                NSString *subName = [sub lastPathComponent];
+                NSDictionary *subInfo = [[self gnustepInfo] objectForKey:subName];
+                NSArray *hdrPrefixes = [subInfo objectForKey:@"headers"];
+                NSString *libName = subName;
+                if ([hdrPrefixes count] > 0) {
+                    libName = [hdrPrefixes objectAtIndex:0];
+                }
+                // Header path
+                NSArray *hdrCandidates = @[
+                    [libDir stringByAppendingPathComponent:@"Headers"],
+                    libDir
+                ];
+                for (NSString *hdrDir in hdrCandidates) {
+                    if ([fm fileExistsAtPath:hdrDir]) {
+                        NSArray *contents = [fm contentsOfDirectoryAtPath:hdrDir error:NULL];
+                        for (NSString *f in contents) {
+                            if ([[f pathExtension] isEqualToString:@"h"]) {
+                                if ([cppFlags length] > 0) [cppFlags appendString:@" "];
+                                [cppFlags appendFormat:@"-I%@", hdrDir];
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+                // Library path and link flags
+                NSString *objDir = [libDir stringByAppendingPathComponent:@"obj"];
+                if ([fm fileExistsAtPath:objDir]) {
+                    if ([ldFlags length] > 0) [ldFlags appendString:@" "];
+                    [ldFlags appendFormat:@"-L%@", objDir];
+                    if ([guiLibs length] > 0) [guiLibs appendString:@" "];
+                    [guiLibs appendFormat:@"-l%@", libName];
+                }
+            }
+            // Add rpath for runtime: libraries will be in Resources/
+            NSString *appName = [self productNameFromMakefile];
+            if (appName) {
+                if ([ldFlags length] > 0) [ldFlags appendString:@" "];
+                [ldFlags appendFormat:@"-Wl,-rpath,'$$ORIGIN/Resources'"];
+            }
+            // Insert before "all" target
+            NSUInteger insertPos = [taskArgs count];
+            for (NSUInteger i = 0; i < [taskArgs count]; i++) {
+                if ([[taskArgs objectAtIndex:i] isEqualToString:@"all"]) {
+                    insertPos = i;
+                    break;
+                }
+            }
+            if ([cppFlags length] > 0) {
+                [taskArgs insertObject:[NSString stringWithFormat:@"CPPFLAGS=%@", cppFlags]
+                               atIndex:insertPos++];
+            }
+            if ([ldFlags length] > 0) {
+                [taskArgs insertObject:[NSString stringWithFormat:@"ADDITIONAL_LDFLAGS=%@", ldFlags]
+                               atIndex:insertPos++];
+            }
+            if ([guiLibs length] > 0) {
+                [taskArgs insertObject:[NSString stringWithFormat:@"ADDITIONAL_GUI_LIBS=%@", guiLibs]
+                               atIndex:insertPos];
+            }
+        }
+        [buildTask setArguments:taskArgs];
+        [buildTask setEnvironment:[[NSProcessInfo processInfo] environment]];
+    } else {
+        [buildTask setEnvironment:[[NSProcessInfo processInfo] environment]];
+    }
 
     outputPipe = [[NSPipe alloc] init];
     [buildTask setStandardOutput:outputPipe];
@@ -703,6 +790,36 @@ static const CGFloat kSpace16 = 16.0;
         exit(status == 0 ? 0 : status);
     }
 
+    // After successful build, embed dependency libraries into the app bundle
+    if (status == 0 && _dependencyResolved) {
+        NSString *appName = [self productNameFromMakefile];
+        if (appName) {
+            NSString *dir = [makefilePath stringByDeletingLastPathComponent];
+            NSString *appBundle = [[dir stringByAppendingPathComponent:appName]
+                stringByAppendingPathExtension:@"app"];
+            NSString *resDir = [appBundle stringByAppendingPathComponent:@"Resources"];
+            NSString *depDir = [dir stringByAppendingPathComponent:@"GNUstepDependencies"];
+            NSFileManager *fm = [NSFileManager defaultManager];
+            if ([fm fileExistsAtPath:depDir] && [fm fileExistsAtPath:resDir]) {
+                NSArray *subs = [fm contentsOfDirectoryAtPath:depDir error:NULL];
+                for (NSString *sub in subs) {
+                    NSString *objDir = [[depDir stringByAppendingPathComponent:sub]
+                        stringByAppendingPathComponent:@"obj"];
+                    NSArray *objects = [fm contentsOfDirectoryAtPath:objDir error:NULL];
+                    for (NSString *obj in objects) {
+                        if ([[obj pathExtension] isEqualToString:@"so"] ||
+                            [obj hasPrefix:@"lib"]) {
+                            NSString *src = [objDir stringByAppendingPathComponent:obj];
+                            NSString *dst = [resDir stringByAppendingPathComponent:obj];
+                            [fm copyItemAtPath:src toPath:dst error:NULL];
+                            NSLog(@"embed: copied %@ -> %@", [obj lastPathComponent], dst);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     NSString *dName = [self displayNameFromMakefile];
 
     if (status == 0) {
@@ -738,6 +855,11 @@ static const CGFloat kSpace16 = 16.0;
         canLaunch = [ext isEqualToString:@"app"] || [ext isEqualToString:@"prefPane"];
     }
 
+    // Auto-resolve missing GNUstep libraries without dialog
+    if (status != 0 && !_dependencyResolved) {
+        NSLog(@"buildFinished: no dependencies to resolve, showing dialog");
+    }
+
     if (status == 0) {
         if (canLaunch) {
             [alert addButtonWithTitle:@"Install and Launch"];
@@ -766,6 +888,8 @@ static const CGFloat kSpace16 = 16.0;
     } else if (status != 0 && button == NSAlertSecondButtonReturn) {
         NSLog(@"buildFinished: Show Build Log");
         [self showLog:nil];
+    } else if (status != 0 && button == NSAlertFirstButtonReturn) {
+        NSLog(@"buildFinished: Cancel -> quit");
     } else if (status != 0 && button == NSAlertFirstButtonReturn) {
         NSLog(@"buildFinished: Cancel -> quit");
         [self cleanupTempDir];
@@ -1472,6 +1596,419 @@ static const CGFloat kSpace16 = 16.0;
         [[NSFileManager defaultManager] removeItemAtPath:_objDir error:NULL];
         _objDir = nil;
     }
+}
+
+- (NSDictionary *)gnustepInfo
+{
+    if (!_gnustepInfo) {
+        NSString *path = [[NSBundle mainBundle] pathForResource:@"GNUstep.info" ofType:@"plist"];
+        if (path) {
+            _gnustepInfo = [NSDictionary dictionaryWithContentsOfFile:path];
+        }
+        if (!_gnustepInfo) {
+            _gnustepInfo = @{};
+        }
+    }
+    return _gnustepInfo;
+}
+
+- (NSString *)repoForMissingHeader:(NSString *)header
+{
+    // Extract the first path component (e.g., "WebServices" from "WebServices/GWSService.h")
+    // or first two for paths like "gnustep/gui/XXX.h"
+    NSString *first = header;
+    NSString *firstTwo = nil;
+    NSRange slash = [header rangeOfString:@"/"];
+    if (slash.location != NSNotFound) {
+        first = [header substringToIndex:slash.location];
+        NSRange secondSlash = [header rangeOfString:@"/"
+                                            options:0
+                                              range:NSMakeRange(slash.location + 1, [header length] - slash.location - 1)];
+        if (secondSlash.location != NSNotFound) {
+            firstTwo = [header substringToIndex:secondSlash.location];
+        }
+    }
+
+    // Look for a repo whose headers array contains first or firstTwo
+    for (NSString *repo in [self gnustepInfo]) {
+        NSDictionary *info = [[self gnustepInfo] objectForKey:repo];
+        NSArray *headers = [info objectForKey:@"headers"];
+        if ([headers containsObject:first] || (firstTwo && [headers containsObject:firstTwo])) {
+            // Check if the header directory exists (library already installed)
+            NSString *headerDir = [@"/System/Library/Headers" stringByAppendingPathComponent:first];
+            if (![[NSFileManager defaultManager] fileExistsAtPath:headerDir]) {
+                return repo;
+            }
+        }
+    }
+    return nil;
+}
+
+- (void)resolveDependenciesBeforeBuildInDirectory:(NSString *)dir
+{
+    if (!makefilePath) return;
+    if (_dependencyResolved) return;
+
+    NSString *mfContent = [NSString stringWithContentsOfFile:makefilePath
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:NULL];
+    if (!mfContent) return;
+
+    // Build reverse map: header prefix → repo name
+    NSMutableDictionary *headerToRepo = [NSMutableDictionary dictionary];
+    for (NSString *repo in [self gnustepInfo]) {
+        NSDictionary *info = [[self gnustepInfo] objectForKey:repo];
+        for (NSString *hdr in [info objectForKey:@"headers"]) {
+            [headerToRepo setObject:repo forKey:hdr];
+        }
+    }
+
+    NSMutableSet *neededRepos = [NSMutableSet set];
+
+    // Scan ADDITIONAL_*_LIBS and LIBRARIES_DEPEND_UPON for -l<name> references
+    NSString *target = [self productNameFromMakefile:makefilePath];
+    NSMutableString *joined = [NSMutableString stringWithString:mfContent];
+    [joined replaceOccurrencesOfString:@"\\\n"
+                            withString:@" "
+                               options:0
+                                 range:NSMakeRange(0, [joined length])];
+    NSArray *lines = [joined componentsSeparatedByString:@"\n"];
+    for (NSString *line in lines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        if ([trimmed hasPrefix:@"ADDITIONAL_GUI_LIBS"] ||
+            [trimmed hasPrefix:@"ADDITIONAL_OBJC_LIBS"] ||
+            [trimmed hasPrefix:@"ADDITIONAL_TOOL_LIBS"] ||
+            [trimmed hasPrefix:@"LIBRARIES_DEPEND_UPON"] ||
+            [trimmed hasPrefix:[NSString stringWithFormat:@"%@_LIBRARIES_DEPEND_UPON", target]]) {
+            NSString *val = [self parseVariableValue:trimmed];
+            if ([val length] == 0) continue;
+            NSArray *parts = [val componentsSeparatedByCharactersInSet:
+                [NSCharacterSet whitespaceCharacterSet]];
+            for (NSString *part in parts) {
+                if ([part hasPrefix:@"-l"]) {
+                    NSString *libName = [part substringFromIndex:2];
+                    NSString *repo = [headerToRepo objectForKey:libName];
+                    if (repo) {
+                        [neededRepos addObject:repo];
+                    }
+                }
+            }
+        }
+    }
+
+    // Also scan OBJC_FILES for #import "X/..." patterns
+    NSArray *srcVars = @[@"OBJC_FILES", @"OBJCXX_FILES", @"C_FILES", @"CC_FILES",
+                          @"CPP_FILES", @"CXX_FILES", @"OBJCPP_FILES"];
+    NSMutableArray *sourceFiles = [NSMutableArray array];
+    for (NSString *line in lines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        for (NSString *var in srcVars) {
+            NSString *prefixed = target ? [NSString stringWithFormat:@"%@_%@", target, var] : nil;
+            if ((prefixed && [trimmed hasPrefix:prefixed]) || [trimmed hasPrefix:var]) {
+                NSString *val = [self parseVariableValue:trimmed];
+                if ([val length] == 0) continue;
+                NSArray *parts = [val componentsSeparatedByCharactersInSet:
+                    [NSCharacterSet whitespaceCharacterSet]];
+                for (NSString *part in parts) {
+                    if ([part length] > 0 && ![part isEqualToString:@"\\"]) {
+                        [sourceFiles addObject:part];
+                    }
+                }
+            }
+        }
+    }
+    for (NSString *src in sourceFiles) {
+        NSString *srcPath = [dir stringByAppendingPathComponent:src];
+        NSString *srcContent = [NSString stringWithContentsOfFile:srcPath
+                                                         encoding:NSUTF8StringEncoding
+                                                            error:NULL];
+        if (!srcContent) continue;
+        NSScanner *sc = [NSScanner scannerWithString:srcContent];
+        while (![sc isAtEnd]) {
+            NSString *import;
+            if ([sc scanUpToString:@"#import \"" intoString:NULL]) {
+                if ([sc scanString:@"#import \"" intoString:NULL]) {
+                    if ([sc scanUpToString:@"\"" intoString:&import]) {
+                        NSRange slash = [import rangeOfString:@"/"];
+                        if (slash.location != NSNotFound) {
+                            NSString *prefix = [import substringToIndex:slash.location];
+                            NSString *repo = [headerToRepo objectForKey:prefix];
+                            if (repo) [neededRepos addObject:repo];
+                        }
+                    }
+                }
+            } else {
+                // Also check @import X
+                if ([sc scanUpToString:@"#import <" intoString:NULL]) {
+                    if ([sc scanString:@"#import <" intoString:NULL]) {
+                        if ([sc scanUpToString:@">" intoString:&import]) {
+                            NSRange slash = [import rangeOfString:@"/"];
+                            if (slash.location != NSNotFound) {
+                                NSString *prefix = [import substringToIndex:slash.location];
+                                NSString *repo = [headerToRepo objectForKey:prefix];
+                                if (repo) [neededRepos addObject:repo];
+                            }
+                        }
+                    }
+                }
+            }
+            // Break if no progress to avoid infinite loop
+            if ([sc scanLocation] == 0) break;
+        }
+    }
+
+    // Check each needed repo: if not installed, download & build
+    NSString *depDir = [dir stringByAppendingPathComponent:@"GNUstepDependencies"];
+    for (NSString *repo in neededRepos) {
+        NSDictionary *info = [[self gnustepInfo] objectForKey:repo];
+        if (!info) continue;
+        NSArray *headers = [info objectForKey:@"headers"];
+        if ([headers count] == 0) continue;
+        NSString *firstHeader = [headers objectAtIndex:0];
+        NSString *headerDir = [@"/System/Library/Headers" stringByAppendingPathComponent:firstHeader];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:headerDir]) {
+            NSLog(@"resolveDeps: %@ already installed at %@", repo, headerDir);
+            continue; // Already installed system-wide
+        }
+
+        NSString *cloneDir = [depDir stringByAppendingPathComponent:repo];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:cloneDir]) {
+            NSLog(@"resolveDeps: %@ already in GNUstepDependencies", repo);
+            _dependencyResolved = YES;
+            continue; // Already cloned
+        }
+
+        NSLog(@"resolveDeps: need to download %@", repo);
+        [self buildGNUstepRepo:repo info:info dir:dir cloneDir:cloneDir];
+    }
+}
+
+- (void)buildGNUstepRepo:(NSString *)repo info:(NSDictionary *)info dir:(NSString *)dir cloneDir:(NSString *)cloneDir
+{
+    NSString *org = [info objectForKey:@"org"];
+    if (!org) org = @"gnustep";
+    NSString *url = [NSString stringWithFormat:@"https://github.com/%@/%@", org, repo];
+
+    NSString *depDir = [dir stringByAppendingPathComponent:@"GNUstepDependencies"];
+
+    [_statusField setStringValue:[NSString stringWithFormat:@"Downloading %@…", repo]];
+    [_logController appendLog:[NSString stringWithFormat:@"=== Downloading %@ from %@ ===\n", repo, url]];
+
+    [[NSFileManager defaultManager] createDirectoryAtPath:depDir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:NULL];
+
+    NSTask *gitTask = [[NSTask alloc] init];
+    [gitTask setLaunchPath:@"/usr/bin/git"];
+    [gitTask setArguments:@[@"clone", @"--depth=1", url, cloneDir]];
+    [gitTask setStandardOutput:[NSFileHandle fileHandleWithNullDevice]];
+    [gitTask setStandardError:[NSFileHandle fileHandleWithNullDevice]];
+    @try {
+        [gitTask launch];
+        [gitTask waitUntilExit];
+    } @catch (NSException *e) {
+        [_logController appendLog:[NSString stringWithFormat:@"git clone failed: %@\n", [e reason]]];
+        return;
+    }
+
+    if ([gitTask terminationStatus] != 0) {
+        [_logController appendLog:@"git clone failed\n"];
+        return;
+    }
+
+    // Resolve transitive dependencies by scanning the dependency's source files
+    NSString *depMf = [cloneDir stringByAppendingPathComponent:@"GNUmakefile"];
+    NSString *depContent = [NSString stringWithContentsOfFile:depMf
+                                                    encoding:NSUTF8StringEncoding
+                                                       error:NULL];
+    if (depContent) {
+        // Derive the library's target name from the first header prefix
+        NSString *targetName = nil;
+        NSArray *headerPrefixes = [info objectForKey:@"headers"];
+        if ([headerPrefixes count] > 0) {
+            targetName = [headerPrefixes objectAtIndex:0];
+        }
+
+        NSMutableString *depJoined = [NSMutableString stringWithString:depContent];
+        [depJoined replaceOccurrencesOfString:@"\\\n"
+                                   withString:@" "
+                                      options:0
+                                        range:NSMakeRange(0, [depJoined length])];
+        NSArray *depLines = [depJoined componentsSeparatedByString:@"\n"];
+        for (NSString *line in depLines) {
+            NSString *trimmed = [line stringByTrimmingCharactersInSet:
+                [NSCharacterSet whitespaceCharacterSet]];
+            BOOL isLibDep = [trimmed hasPrefix:@"LIBRARIES_DEPEND_UPON"] ||
+                (targetName && [trimmed hasPrefix:[NSString stringWithFormat:@"%@_LIBRARIES_DEPEND_UPON", targetName]]);
+            BOOL isAddLib = [trimmed hasPrefix:@"ADDITIONAL_GUI_LIBS"] ||
+                [trimmed hasPrefix:@"ADDITIONAL_OBJC_LIBS"] ||
+                [trimmed hasPrefix:@"ADDITIONAL_TOOL_LIBS"];
+            if (isLibDep || isAddLib) {
+                NSString *val = [self parseVariableValue:trimmed];
+                if ([val length] == 0) continue;
+                NSArray *parts = [val componentsSeparatedByCharactersInSet:
+                    [NSCharacterSet whitespaceCharacterSet]];
+                for (NSString *part in parts) {
+                    if ([part hasPrefix:@"-l"]) {
+                        NSString *libName = [part substringFromIndex:2];
+                        NSDictionary *headerToRepo = [NSMutableDictionary dictionary];
+                        for (NSString *r in [self gnustepInfo]) {
+                            NSDictionary *inf = [[self gnustepInfo] objectForKey:r];
+                            for (NSString *hdr in [inf objectForKey:@"headers"]) {
+                                [headerToRepo setValue:r forKey:hdr];
+                            }
+                        }
+                        NSString *depRepo = [headerToRepo objectForKey:libName];
+                        if (depRepo && ![depRepo isEqualToString:repo]) {
+                            NSString *depDir2 = [dir stringByAppendingPathComponent:@"GNUstepDependencies"];
+                            NSString *depCloneDir = [depDir2 stringByAppendingPathComponent:depRepo];
+                            NSDictionary *depInfo = [[self gnustepInfo] objectForKey:depRepo];
+                            if (depInfo && ![[NSFileManager defaultManager] fileExistsAtPath:depCloneDir]) {
+                                [_logController appendLog:[NSString stringWithFormat:@"=== Resolving transitive dependency %@ ===\n", depRepo]];
+                                [self buildGNUstepRepo:depRepo info:depInfo dir:dir cloneDir:depCloneDir];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    [_statusField setStringValue:[NSString stringWithFormat:@"Building %@…", repo]];
+    [_logController appendLog:[NSString stringWithFormat:@"=== Building %@ ===\n", repo]];
+
+    // Run configure if it exists
+    NSString *configure = [cloneDir stringByAppendingPathComponent:@"configure"];
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:configure]) {
+        [_logController appendLog:[NSString stringWithFormat:@"=== Running configure in %@ ===\n", repo]];
+        NSPipe *cOut = [NSPipe pipe];
+        NSTask *cfgTask = [[NSTask alloc] init];
+        [cfgTask setCurrentDirectoryPath:cloneDir];
+        [cfgTask setLaunchPath:configure];
+        [cfgTask setArguments:@[]];
+        [cfgTask setEnvironment:[[NSProcessInfo processInfo] environment]];
+        [cfgTask setStandardOutput:cOut];
+        [cfgTask setStandardError:cOut];
+        @try {
+            [cfgTask launch];
+            [cfgTask waitUntilExit];
+            NSData *cData = [[cOut fileHandleForReading] readDataToEndOfFile];
+            if ([cData length] > 0) {
+                NSString *cStr = [[NSString alloc] initWithData:cData encoding:NSUTF8StringEncoding];
+                [_logController appendLog:cStr];
+            }
+        } @catch (NSException *e) {
+            [_logController appendLog:[NSString stringWithFormat:@"configure failed: %@\n", [e reason]]];
+        }
+    }
+
+    NSString *gmakePath = [NSTask launchPathForTool:@"gmake"];
+    if (!gmakePath) gmakePath = [NSTask launchPathForTool:@"make"];
+    if (!gmakePath) return;
+
+    // Build include/lib path from other deps in GNUstepDependencies
+    NSString *depDir2 = [dir stringByAppendingPathComponent:@"GNUstepDependencies"];
+    NSMutableDictionary *buildEnv = [[[NSProcessInfo processInfo] environment] mutableCopy];
+    NSMutableString *depCppFlags = [NSMutableString string];
+    NSMutableString *depLdFlags = [NSMutableString string];
+    NSFileManager *fm2 = [NSFileManager defaultManager];
+    NSArray *otherDeps = [fm2 contentsOfDirectoryAtPath:depDir2 error:NULL];
+    for (NSString *od in otherDeps) {
+        if ([od isEqualToString:repo]) continue;
+        NSString *odir = [depDir2 stringByAppendingPathComponent:od];
+        NSArray *chk = @[
+            [odir stringByAppendingPathComponent:@"Headers"],
+            odir
+        ];
+        for (NSString *hd in chk) {
+            if ([fm2 fileExistsAtPath:hd]) {
+                NSArray *cnt = [fm2 contentsOfDirectoryAtPath:hd error:NULL];
+                for (NSString *f in cnt) {
+                    if ([[f pathExtension] isEqualToString:@"h"]) {
+                        if ([depCppFlags length] > 0) [depCppFlags appendString:@" "];
+                        [depCppFlags appendFormat:@"-I%@", hd];
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        // Add library path
+        NSString *oDir = [odir stringByAppendingPathComponent:@"obj"];
+        if ([fm2 fileExistsAtPath:oDir]) {
+            if ([depLdFlags length] > 0) [depLdFlags appendString:@" "];
+            [depLdFlags appendFormat:@"-L%@", oDir];
+        }
+    }
+    if ([depCppFlags length] > 0) {
+        [buildEnv setObject:depCppFlags forKey:@"ADDITIONAL_CPPFLAGS"];
+    }
+    if ([depLdFlags length] > 0) {
+        [buildEnv setObject:depLdFlags forKey:@"ADDITIONAL_LDFLAGS"];
+    }
+
+    NSPipe *bOut = [NSPipe pipe];
+    NSPipe *bErr = [NSPipe pipe];
+
+    NSTask *buildTask2 = [[NSTask alloc] init];
+    [buildTask2 setCurrentDirectoryPath:cloneDir];
+    [buildTask2 setLaunchPath:gmakePath];
+    [buildTask2 setArguments:@[@"-f", @"GNUmakefile", @"clean", @"all"]];
+    [buildTask2 setEnvironment:buildEnv];
+    [buildTask2 setStandardOutput:bOut];
+    [buildTask2 setStandardError:bErr];
+    @try {
+        [buildTask2 launch];
+        [buildTask2 waitUntilExit];
+    } @catch (NSException *e) {
+        [_logController appendLog:[NSString stringWithFormat:@"build failed: %@\n", [e reason]]];
+        return;
+    }
+
+    NSData *outData = [[bOut fileHandleForReading] readDataToEndOfFile];
+    if ([outData length] > 0) {
+        NSString *outStr = [[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding];
+        [_logController appendLog:outStr];
+        write(STDOUT_FILENO, [outData bytes], [outData length]);
+    }
+    NSData *errData = [[bErr fileHandleForReading] readDataToEndOfFile];
+    if ([errData length] > 0) {
+        NSString *errStr = [[NSString alloc] initWithData:errData encoding:NSUTF8StringEncoding];
+        [_logController appendLog:errStr];
+        write(STDERR_FILENO, [errData bytes], [errData length]);
+    }
+
+    if ([buildTask2 terminationStatus] != 0) {
+        [_logController appendLog:@"build failed\n"];
+        return;
+    }
+
+    // Create header prefix subdirectory with symlinks so imports like
+    // #import "WebServices/GWSService.h" resolve correctly
+    NSArray *prefixes = [info objectForKey:@"headers"];
+    for (NSString *prefix in prefixes) {
+        NSString *hdrLinkDir = [cloneDir stringByAppendingPathComponent:prefix];
+        [[NSFileManager defaultManager] createDirectoryAtPath:hdrLinkDir
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:NULL];
+        NSArray *hFiles = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:cloneDir error:NULL];
+        for (NSString *f in hFiles) {
+            if ([[f pathExtension] isEqualToString:@"h"] || [[f pathExtension] isEqualToString:@"a"]) {
+                NSString *linkPath = [hdrLinkDir stringByAppendingPathComponent:f];
+                NSString *target = [@"../" stringByAppendingPathComponent:f];
+                [[NSFileManager defaultManager] createSymbolicLinkAtPath:linkPath
+                                                     withDestinationPath:target
+                                                                   error:NULL];
+            }
+        }
+    }
+
+    [_logController appendLog:[NSString stringWithFormat:@"=== %@ built in %@ ===\n", repo, cloneDir]];
+    _dependencyResolved = YES;
 }
 
 - (void)windowWillClose:(NSNotification *)notification

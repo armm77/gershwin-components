@@ -27,6 +27,7 @@
     NSInteger _totalFileCount;
     NSInteger _compiledFileCount;
     NSString *_objDir;
+    BOOL _dependencyResolved;
 }
 
 @property (strong) NSString *makefilePath;
