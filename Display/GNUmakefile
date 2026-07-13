@@ -1,9 +1,9 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
 BUNDLE_NAME = Display
-Display_OBJC_FILES = DisplayPane.m DisplayController.m DisplayView.m
+Display_OBJC_FILES = DisplayPane.m DisplayController.m DisplayView.m X11DisplayManager.m
 Display_RESOURCE_FILES = Display.png DisplayInfo.plist
-Display_BUNDLE_LIBS = -lPreferencePanes
+Display_BUNDLE_LIBS = -lPreferencePanes -lXrandr -lX11
 Display_PRINCIPAL_CLASS = DisplayPane
 PREF_INSTALL_DIR = $(GNUSTEP_SYSTEM_LIBRARY)/Bundles
 BUNDLE_EXTENSION = .prefPane

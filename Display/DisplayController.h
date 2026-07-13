@@ -8,6 +8,7 @@
 #import <AppKit/AppKit.h>
 
 @class DisplayView;
+@class X11DisplayManager;
 
 // Represents a single display configuration
 @interface DisplayInfo : NSObject
@@ -19,6 +20,7 @@
     BOOL isConnected;
     NSString *output; // xrandr output name
     NSString *currentResolutionString; // e.g., "1920x1080" or "1920x1080i"
+    NSArray *availableResolutions; // all modes for this display
 }
 
 @property (retain) NSString *name;
@@ -28,6 +30,7 @@
 @property BOOL isConnected;
 @property (retain) NSString *output;
 @property (retain) NSString *currentResolutionString;
+@property (retain) NSArray *availableResolutions;
 
 @end
 
@@ -38,10 +41,9 @@
     NSView *mainView;
     NSPopUpButton *resolutionPopup;
     NSButton *mirrorDisplaysCheckbox;
-    NSString *xrandrPath;
+    X11DisplayManager *x11;
     DisplayInfo *selectedDisplay; // Currently selected display for resolution changes
     BOOL isRefreshing; // Guards against concurrent refreshDisplays: calls
-    NSString *lastXrandrOutput; // Cached xrandr output to avoid redundant process spawns
     NSButton *saveButton;
     NSString *savedStateSnapshot; // Snapshot of display state at last save/load
     NSUInteger previousDisplayCount; // Track display count to detect hot-plug
@@ -49,11 +51,9 @@
 
 - (NSView *)createMainView;
 - (void)refreshDisplays:(NSTimer *)timer;
-- (void)parseXrandrOutput:(NSString *)output;
 - (void)applyDisplayConfiguration;
 - (void)setPrimaryDisplay:(DisplayInfo *)display;
 - (NSArray *)displays;
-- (NSArray *)getAvailableResolutionsForDisplay:(DisplayInfo *)display;
 - (void)showResolutionConfirmationDialogWithOldResolution:(NSString *)oldRes 
                                            newResolution:(NSString *)newRes 
                                                  display:(DisplayInfo *)display;
@@ -64,8 +64,6 @@
 - (void)resolutionKeepClicked:(id)sender;
 - (void)selectDisplay:(DisplayInfo *)display;
 - (DisplayInfo *)selectedDisplay;
-- (NSString *)findXrandrPath;
-- (BOOL)isXrandrAvailable;
 - (void)autoConfigureDisplays;
 - (void)saveSettings:(id)sender;
 - (void)updateSaveButtonState;

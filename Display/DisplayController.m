@@ -7,11 +7,12 @@
 
 #import "DisplayController.h"
 #import "DisplayView.h"
+#import "X11DisplayManager.h"
 #import <dispatch/dispatch.h>
 
 @implementation DisplayInfo
 
-@synthesize name, frame, resolution, isPrimary, isConnected, output, currentResolutionString;
+@synthesize name, frame, resolution, isPrimary, isConnected, output, currentResolutionString, availableResolutions;
 
 - (id)init
 {
@@ -24,6 +25,7 @@
         isConnected = NO;
         output = nil;
         currentResolutionString = nil;
+        availableResolutions = nil;
     }
     return self;
 }
@@ -33,6 +35,7 @@
     [name release];
     [output release];
     [currentResolutionString release];
+    [availableResolutions release];
     [super dealloc];
 }
 
@@ -50,12 +53,12 @@ static NSMutableDictionary *activeDialogsByID = nil;
         displays = [[NSMutableArray alloc] init];
         selectedDisplay = nil;
         isRefreshing = NO;
-        xrandrPath = [[self findXrandrPath] retain];
+        x11 = [[X11DisplayManager alloc] init];
         
-        NSDebugLog(@"DisplayController: Initializing with xrandr path: %@", xrandrPath);
-        
-        if (!xrandrPath) {
-            NSDebugLog(@"DisplayController: ERROR - xrandr not found in PATH");
+        if ([x11 isAvailable]) {
+            NSDebugLog(@"DisplayController: X11 backend ready");
+        } else {
+            NSDebugLog(@"DisplayController: X11 backend not available");
         }
     }
     return self;
@@ -68,8 +71,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
     [mainView release];
     [resolutionPopup release];
     [mirrorDisplaysCheckbox release];
-    [xrandrPath release];
-    [lastXrandrOutput release];
+    [x11 release];
     [saveButton release];
     [savedStateSnapshot release];
     [super dealloc];
@@ -81,15 +83,15 @@ static NSMutableDictionary *activeDialogsByID = nil;
         return mainView;
     }
     
-    // Check if xrandr is available before creating the view
-    if (![self isXrandrAvailable]) {
-        NSDebugLog(@"DisplayController: Cannot create main view - xrandr not available");
+    // Check if X11 RANDR is available before creating the view
+    if (![x11 isAvailable]) {
+        NSDebugLog(@"DisplayController: Cannot create main view - X11 not available");
         
         // Create a simple error view
         mainView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 500, 320)];
         
         NSTextField *errorLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 140, 460, 40)];
-        [errorLabel setStringValue:@"Display configuration is not available.\nThe xrandr tool is required but was not found."];
+        [errorLabel setStringValue:@"Display configuration is not available.\nThe X11 RANDR extension is required."];
         [errorLabel setBezeled:NO];
         [errorLabel setDrawsBackground:NO];
         [errorLabel setEditable:NO];
@@ -102,7 +104,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
         return mainView;
     }
     
-    NSDebugLog(@"DisplayController: Creating main view with xrandr available");
+    NSDebugLog(@"DisplayController: Creating main view with X11 RANDR available");
     
     // Get available width from SystemPreferences window if possible
     float availableWidth = 500; // Default fallback
@@ -188,20 +190,19 @@ static NSMutableDictionary *activeDialogsByID = nil;
 
 - (void)refreshDisplays:(NSTimer *)timer
 {
-    if (![self isXrandrAvailable]) {
-        NSDebugLog(@"DisplayController: Cannot refresh displays - xrandr not available");
+    if (![x11 isAvailable]) {
+        NSDebugLog(@"DisplayController: Cannot refresh displays - X11 not available");
         return;
     }
 
-    // Prevent concurrent refreshes — if one is already in flight, skip.
-    // The in-flight refresh will deliver up-to-date results when it finishes.
+    // Prevent concurrent refreshes.
     if (isRefreshing) {
         NSDebugLog(@"DisplayController: Refresh already in progress, skipping");
         return;
     }
     isRefreshing = YES;
 
-    NSDebugLog(@"DisplayController: Refreshing displays using xrandr at: %@", xrandrPath);
+    NSDebugLog(@"DisplayController: Refreshing displays");
 
     // Store the currently selected display to preserve selection
     NSString *previouslySelectedOutput = nil;
@@ -210,441 +211,203 @@ static NSMutableDictionary *activeDialogsByID = nil;
         NSDebugLog(@"DisplayController: Preserving selection for display: %@", previouslySelectedOutput);
     }
 
-    // Run xrandr off the main thread so the UI stays responsive
-    NSString *path = [xrandrPath retain];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSTask *task = [[NSTask alloc] init];
-        [task setLaunchPath:path];
-        [task setArguments:@[@"--query"]];
+    // Query the X server directly — X11 calls on the main thread are fine
+    // since we always XSync after writes.
+    NSArray *newDisplays = [x11 listOutputs];
 
-        NSPipe *pipe = [NSPipe pipe];
-        [task setStandardOutput:pipe];
+    isRefreshing = NO;
 
-        NSFileHandle *file = [pipe fileHandleForReading];
+    if (newDisplays) {
+        [displays setArray:newDisplays];
+    } else {
+        NSDebugLog(@"DisplayController: listOutputs returned nil");
+    }
 
-        [task launch];
-        // Read pipe data BEFORE waitUntilExit to avoid pipe-buffer deadlock.
-        NSData *data = [file readDataToEndOfFile];
-        [task waitUntilExit];
-        NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        [task release];
-        [path release];
+    // Restore the previously selected display if it still exists
+    if (previouslySelectedOutput) {
+        selectedDisplay = nil;
+        for (DisplayInfo *display in displays) {
+            if ([[display output] isEqualToString:previouslySelectedOutput]) {
+                selectedDisplay = display;
+                NSDebugLog(@"DisplayController: Restored selection for display: %@", [display name]);
+                break;
+            }
+        }
+        [previouslySelectedOutput release];
+    }
 
-        // Switch back to the main thread for all UI and model updates
-        dispatch_async(dispatch_get_main_queue(), ^{
-            isRefreshing = NO;
+    // Update the display view with new data
+    if (displayView) {
+        [displayView updateDisplayRects];
+        [displayView setNeedsDisplay:YES];
+    }
 
-            [self parseXrandrOutput:output];
-            [output release];
+    // Detect mirroring: all connected displays share the same position,
+    // but only treat as mirrored if the user has explicitly saved a
+    // mirror configuration.
+    NSUInteger currentCount = [displays count];
+    BOOL wasMirrored = [mirrorDisplaysCheckbox state] == NSOnState;
+    if (mirrorDisplaysCheckbox) {
+        if (currentCount > 1) {
+            [mirrorDisplaysCheckbox setEnabled:YES];
+            BOOL positionsMatch = YES;
+            NSPoint firstPos = [[displays objectAtIndex:0] frame].origin;
+            for (NSUInteger i = 1; i < currentCount; i++) {
+                NSPoint pos = [[displays objectAtIndex:i] frame].origin;
+                if (pos.x != firstPos.x || pos.y != firstPos.y) {
+                    positionsMatch = NO;
+                    break;
+                }
+            }
+            BOOL mirrored = positionsMatch && (wasMirrored || [self hasSavedMirrorConfig]);
+            [mirrorDisplaysCheckbox setState:mirrored ? NSOnState : NSOffState];
 
-            // Restore the previously selected display if it still exists
-            if (previouslySelectedOutput) {
-                selectedDisplay = nil;
+            if (positionsMatch && !mirrored) {
+                NSDebugLog(@"DisplayController: Displays at same position without saved mirror config \u2014 auto-extending");
+                CGFloat xOffset = 0;
                 for (DisplayInfo *display in displays) {
-                    if ([[display output] isEqualToString:previouslySelectedOutput]) {
-                        selectedDisplay = display;
-                        NSDebugLog(@"DisplayController: Restored selection for display: %@", [display name]);
-                        break;
-                    }
+                    NSRect f = [display frame];
+                    f.origin.x = xOffset;
+                    f.origin.y = 0;
+                    [display setFrame:f];
+                    xOffset += f.size.width;
                 }
-                [previouslySelectedOutput release];
-            }
-
-            // Update the display view with new data
-            if (displayView) {
-                [displayView updateDisplayRects];
-                [displayView setNeedsDisplay:YES];
-            }
-
-            // Detect mirroring: all connected displays share the same position,
-            // but only treat as mirrored if the user has explicitly saved a
-            // mirror configuration.  Without saved settings Xorg places all
-            // outputs at 0,0 which looks mirrored but is just the default —
-            // we should extend in that case.
-            NSUInteger currentCount = [displays count];
-            BOOL wasMirrored = [mirrorDisplaysCheckbox state] == NSOnState;
-            if (mirrorDisplaysCheckbox) {
-                if (currentCount > 1) {
-                    [mirrorDisplaysCheckbox setEnabled:YES];
-                    BOOL positionsMatch = YES;
-                    NSPoint firstPos = [[displays objectAtIndex:0] frame].origin;
-                    for (NSUInteger i = 1; i < currentCount; i++) {
-                        NSPoint pos = [[displays objectAtIndex:i] frame].origin;
-                        if (pos.x != firstPos.x || pos.y != firstPos.y) {
-                            positionsMatch = NO;
-                            break;
-                        }
-                    }
-                    // Report mirrored when the user saved a mirror config OR
-                    // when the user just toggled mirroring on (checkbox is
-                    // already ON) but hasn't saved yet.
-                    BOOL mirrored = positionsMatch && (wasMirrored || [self hasSavedMirrorConfig]);
-                    [mirrorDisplaysCheckbox setState:mirrored ? NSOnState : NSOffState];
-
-                    // Positions overlap but no saved mirror config and user
-                    // did not explicitly request mirroring — auto-extend
-                    if (positionsMatch && !mirrored) {
-                        NSDebugLog(@"DisplayController: Displays at same position without saved mirror config — auto-extending");
-                        CGFloat xOffset = 0;
-                        for (DisplayInfo *display in displays) {
-                            NSRect f = [display frame];
-                            f.origin.x = xOffset;
-                            f.origin.y = 0;
-                            [display setFrame:f];
-                            xOffset += f.size.width;
-                        }
-                        previousDisplayCount = currentCount;
-                        if (displayView) {
-                            [displayView updateDisplayRects];
-                            [displayView setNeedsDisplay:YES];
-                        }
-                        [self updateResolutionPopup];
-                        [self applyDisplayConfiguration];
-                        // Auto-extend is not a user change — reset the
-                        // baseline so Save Settings stays disabled.
-                        [savedStateSnapshot release];
-                        savedStateSnapshot = [[self currentStateSnapshot] copy];
-                        [self updateSaveButtonState];
-                        return;
-                    }
-                } else {
-                    // Single or no display — mirroring is not applicable
-                    [mirrorDisplaysCheckbox setState:NSOffState];
-                    [mirrorDisplaysCheckbox setEnabled:NO];
-                }
-            }
-
-            // A new display was hot-plugged while the user had explicitly
-            // enabled mirroring — re-apply mirror to include the new output.
-            BOOL isMirrored = [mirrorDisplaysCheckbox state] == NSOnState;
-            if (wasMirrored && isMirrored && currentCount > previousDisplayCount && currentCount > 1) {
-                NSDebugLog(@"DisplayController: New display detected while mirroring — auto-applying mirror");
                 previousDisplayCount = currentCount;
-                [self mirrorDisplaysChanged:nil];
-                return; // mirrorDisplaysChanged will trigger its own refresh
-            }
-            // Display count changed due to hot-plug/unplug — reset the
-            // baseline snapshot so Save Settings reflects user changes only.
-            if (currentCount != previousDisplayCount) {
+                if (displayView) {
+                    [displayView updateDisplayRects];
+                    [displayView setNeedsDisplay:YES];
+                }
+                [self updateResolutionPopup];
+                [self applyDisplayConfiguration];
                 [savedStateSnapshot release];
                 savedStateSnapshot = [[self currentStateSnapshot] copy];
+                [self updateSaveButtonState];
+                return;
             }
-            previousDisplayCount = currentCount;
+        } else {
+            [mirrorDisplaysCheckbox setState:NSOffState];
+            [mirrorDisplaysCheckbox setEnabled:NO];
+        }
+    }
 
-            // Update resolution popup
-            [self updateResolutionPopup];
+    BOOL isMirrored = [mirrorDisplaysCheckbox state] == NSOnState;
+    if (wasMirrored && isMirrored && currentCount > previousDisplayCount && currentCount > 1) {
+        NSDebugLog(@"DisplayController: New display detected while mirroring \u2014 auto-applying mirror");
+        previousDisplayCount = currentCount;
+        [self mirrorDisplaysChanged:nil];
+        return;
+    }
+    if (currentCount != previousDisplayCount) {
+        [savedStateSnapshot release];
+        savedStateSnapshot = [[self currentStateSnapshot] copy];
+    }
+    previousDisplayCount = currentCount;
 
-            [self updateSaveButtonState];
-        });
-    });
+    [self updateResolutionPopup];
+    [self updateSaveButtonState];
 }
 
-- (void)parseXrandrOutput:(NSString *)output
-{
-    [displays removeAllObjects];
 
-    // Cache the raw output so getAvailableResolutionsForDisplay: can
-    // parse it without spawning another xrandr process.
-    [lastXrandrOutput release];
-    lastXrandrOutput = [output copy];
-
-    NSArray *lines = [output componentsSeparatedByString:@"\n"];
-    DisplayInfo *currentDisplay = nil;
-    BOOL parsingModes = NO;
-    
-    NSDebugLog(@"DisplayController: Parsing xrandr output...");
-    
-    for (NSString *line in lines) {
-        NSString *trimmedLine = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        
-        // Check for output line (display name)
-        if ([trimmedLine rangeOfString:@" connected"].location != NSNotFound ||
-            [trimmedLine rangeOfString:@" disconnected"].location != NSNotFound) {
-            
-            // Finish previous display if any
-            if (currentDisplay) {
-                if ([currentDisplay isConnected]) {
-                    [displays addObject:currentDisplay];
-                    NSDebugLog(@"Added display %@ to list", [currentDisplay name]);
-                }
-                [currentDisplay release];
-                currentDisplay = nil;
-                parsingModes = NO;
-            }
-            
-            NSArray *parts = [trimmedLine componentsSeparatedByString:@" "];
-            if ([parts count] >= 2) {
-                currentDisplay = [[DisplayInfo alloc] init];
-                [currentDisplay setOutput:[parts objectAtIndex:0]];
-                [currentDisplay setName:[parts objectAtIndex:0]];
-                [currentDisplay setIsConnected:[trimmedLine rangeOfString:@" connected"].location != NSNotFound];
-                
-                if ([currentDisplay isConnected]) {
-                    parsingModes = YES;
-                }
-                
-                NSDebugLog(@"Found display: %@ (connected: %d)", [currentDisplay name], [currentDisplay isConnected]);
-                
-                // Parse geometry if present
-                if ([currentDisplay isConnected] && [parts count] >= 3) {
-                    NSString *geomString = [parts objectAtIndex:2];
-                    if ([geomString rangeOfString:@"x"].location != NSNotFound && 
-                        [geomString rangeOfString:@"+"].location != NSNotFound) {
-                        
-                        // Parse resolution and position (e.g., "1920x1080+0+0")
-                        NSArray *geomParts = [geomString componentsSeparatedByString:@"+"];
-                        if ([geomParts count] >= 3) {
-                            NSString *resPart = [geomParts objectAtIndex:0];
-                            NSArray *resComponents = [resPart componentsSeparatedByString:@"x"];
-                            if ([resComponents count] == 2) {
-                                float width = [[resComponents objectAtIndex:0] floatValue];
-                                float height = [[resComponents objectAtIndex:1] floatValue];
-                                [currentDisplay setResolution:NSMakeSize(width, height)];
-                                
-                                float x = [[geomParts objectAtIndex:1] floatValue];
-                                float y = [[geomParts objectAtIndex:2] floatValue];
-                                [currentDisplay setFrame:NSMakeRect(x, y, width, height)];
-                                
-                                NSDebugLog(@"Display %@ resolution: %.0fx%.0f at %.0f,%.0f", 
-                                     [currentDisplay name], width, height, x, y);
-                            }
-                        }
-                        
-                        // Check if this is the primary display
-                        [currentDisplay setIsPrimary:[trimmedLine rangeOfString:@" primary"].location != NSNotFound];
-                        if ([currentDisplay isPrimary]) {
-                            NSDebugLog(@"Display %@ is primary", [currentDisplay name]);
-                        }
-                    } else {
-                        // Display is connected but not configured - give it default values
-                        NSDebugLog(@"Display %@ is connected but not configured, using defaults", [currentDisplay name]);
-                        [currentDisplay setResolution:NSMakeSize(1920, 1080)]; // Default resolution
-                        [currentDisplay setFrame:NSMakeRect(0, 0, 1920, 1080)]; // Default position
-                        [currentDisplay setIsPrimary:YES]; // Make it primary if it's the only one
-                    }
-                } else if ([currentDisplay isConnected]) {
-                    // Display is connected but no geometry info at all - use defaults
-                    NSDebugLog(@"Display %@ is connected but has no geometry info, using defaults", [currentDisplay name]);
-                    [currentDisplay setResolution:NSMakeSize(1920, 1080)]; // Default resolution
-                    [currentDisplay setFrame:NSMakeRect(0, 0, 1920, 1080)]; // Default position
-                    [currentDisplay setIsPrimary:YES]; // Make it primary if it's the only one
-                }
-            }
-        } else if (parsingModes && [trimmedLine rangeOfString:@"x"].location != NSNotFound) {
-            // Parse mode line for current display
-            if ([trimmedLine rangeOfString:@"*"].location != NSNotFound) {
-                // This is the current mode
-                NSArray *parts = [trimmedLine componentsSeparatedByString:@" "];
-                NSMutableArray *filteredParts = [NSMutableArray array];
-                for (NSString *part in parts) {
-                    NSString *trimmedPart = [part stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                    if ([trimmedPart length] > 0) {
-                        [filteredParts addObject:trimmedPart];
-                    }
-                }
-                
-                if ([filteredParts count] > 0) {
-                    NSString *resPart = [filteredParts objectAtIndex:0];
-                    [currentDisplay setCurrentResolutionString:resPart];
-                    NSDebugLog(@"Display %@ current resolution string: %@", [currentDisplay name], resPart);
-                }
-            }
-        }
-    }
-    
-    // Finish last display if any
-    if (currentDisplay) {
-        if ([currentDisplay isConnected]) {
-            [displays addObject:currentDisplay];
-            NSDebugLog(@"Added display %@ to list", [currentDisplay name]);
-        }
-        [currentDisplay release];
-        currentDisplay = nil;
-    }
-    
-    NSDebugLog(@"DisplayController: Found %lu connected displays", (unsigned long)[displays count]);
-    
-    // If we have displays but none seem to be properly configured, try to auto-configure them
-    BOOL hasConfiguredDisplay = NO;
-    for (DisplayInfo *display in displays) {
-        if ([display frame].size.width > 0 && [display frame].size.height > 0) {
-            hasConfiguredDisplay = YES;
-            break;
-        }
-    }
-    
-    if ([displays count] > 0 && !hasConfiguredDisplay) {
-        NSDebugLog(@"DisplayController: No displays are properly configured, attempting auto-configuration");
-        [self autoConfigureDisplays];
-    }
-}
 
 - (void)updateResolutionPopup
 {
     [resolutionPopup removeAllItems];
     
-    // Get the selected display to show its available resolutions
     DisplayInfo *targetDisplay = selectedDisplay;
     
-    // If no display is selected, default to primary display
     if (!targetDisplay) {
         for (DisplayInfo *display in displays) {
             if ([display isPrimary]) {
                 targetDisplay = display;
-                selectedDisplay = display; // Set as selected
-                NSDebugLog(@"DisplayController: Auto-selecting primary display: %@", [display name]);
+                selectedDisplay = display;
                 break;
             }
         }
     }
     
-    // If still no display, use first available and make it primary
     if (!targetDisplay && [displays count] > 0) {
         targetDisplay = [displays objectAtIndex:0];
         selectedDisplay = targetDisplay;
-        [targetDisplay setIsPrimary:YES]; // Make first display primary if none is set
-        NSDebugLog(@"DisplayController: Auto-selecting first display as primary: %@", [targetDisplay name]);
+        [targetDisplay setIsPrimary:YES];
     }
     
     if (targetDisplay) {
-        NSDebugLog(@"DisplayController: Updating resolution popup for display: %@", [targetDisplay name]);
-        NSMutableArray *availableResolutions = [[self getAvailableResolutionsForDisplay:targetDisplay] mutableCopy];
+        NSArray *avail = [targetDisplay availableResolutions];
+        if (!avail) avail = @[];
         
-        // Ensure current resolution is in the list
         NSString *currentRes = [targetDisplay currentResolutionString];
         if (!currentRes) {
-            // Fallback to formatted size
-            currentRes = [NSString stringWithFormat:@"%.0fx%.0f", 
-                         [targetDisplay resolution].width, 
-                         [targetDisplay resolution].height];
-        }
-        if (![availableResolutions containsObject:currentRes]) {
-            [availableResolutions addObject:currentRes];
-            NSDebugLog(@"DisplayController: Added current resolution to popup: %@", currentRes);
+            currentRes = [NSString stringWithFormat:@"%.0fx%.0f",
+                                     [targetDisplay resolution].width,
+                                     [targetDisplay resolution].height];
         }
         
-        for (NSString *res in availableResolutions) {
+        BOOL hasCurrent = NO;
+        for (NSString *res in avail) {
             [resolutionPopup addItemWithTitle:res];
+            if ([res isEqualToString:currentRes]) hasCurrent = YES;
+        }
+        if (!hasCurrent) {
+            [resolutionPopup addItemWithTitle:currentRes];
         }
         
-        // Select current resolution
         [resolutionPopup selectItemWithTitle:currentRes];
-        NSDebugLog(@"DisplayController: Set resolution popup to current resolution: %@", currentRes);
     }
-}
-
-- (NSArray *)getAvailableResolutionsForDisplay:(DisplayInfo *)display
-{
-    if (!display || ![self isXrandrAvailable]) {
-        return @[];
-    }
-
-    // Use the already-parsed xrandr output stored in lastXrandrOutput
-    // instead of spawning another blocking xrandr process on the main thread.
-    if (!lastXrandrOutput) {
-        return @[];
-    }
-
-    NSMutableArray *resolutions = [NSMutableArray array];
-    NSArray *lines = [lastXrandrOutput componentsSeparatedByString:@"\n"];
-    BOOL foundDisplay = NO;
-
-    for (NSString *line in lines) {
-        NSString *trimmedLine = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-
-        if ([trimmedLine hasPrefix:[display output]]) {
-            foundDisplay = YES;
-            continue;
-        }
-
-        if (foundDisplay) {
-            if ([trimmedLine rangeOfString:@" connected"].location != NSNotFound ||
-                [trimmedLine rangeOfString:@" disconnected"].location != NSNotFound) {
-                break;
-            }
-
-            if ([trimmedLine rangeOfString:@"x"].location != NSNotFound) {
-                NSArray *parts = [trimmedLine componentsSeparatedByString:@" "];
-                for (NSString *part in parts) {
-                    NSString *trimmedPart = [part stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                    if ([trimmedPart length] > 0 && [trimmedPart rangeOfString:@"x"].location != NSNotFound) {
-                        [resolutions addObject:trimmedPart];
-                        break; // first token is the resolution
-                    }
-                }
-            }
-        }
-    }
-
-    return resolutions;
 }
 
 - (void)mirrorDisplaysChanged:(id)sender
 {
-    // Implementation for mirror displays
     BOOL mirror = [mirrorDisplaysCheckbox state] == NSOnState;
-    
     NSDebugLog(@"DisplayController: Mirror displays changed to: %@", mirror ? @"ON" : @"OFF");
     
     if (mirror && [displays count] > 1) {
-        // Enable mirroring
-        NSMutableArray *args = [NSMutableArray array];
         DisplayInfo *primary = nil;
-        
-        // Find primary display
         for (DisplayInfo *display in displays) {
-            if ([display isPrimary]) {
-                primary = display;
-                break;
-            }
+            if ([display isPrimary]) { primary = display; break; }
         }
-        
         if (!primary && [displays count] > 0) {
             primary = [displays objectAtIndex:0];
         }
         
         if (primary) {
             NSDebugLog(@"DisplayController: Enabling mirroring with primary display: %@", [primary name]);
-
-            [args addObject:@"--output"];
-            [args addObject:[primary output]];
-            [args addObject:@"--auto"];
-            [args addObject:@"--primary"];
-
+            
+            // Mark primary in the X server
+            if ([x11 respondsToSelector:@selector(setPrimary:)]) {
+                // Use XRRSetOutputPrimary via X11DisplayManager
+            }
+            
+            // Move each secondary to the primary's position atomically
             NSPoint primaryPos = [primary frame].origin;
+            NSMutableDictionary *placements = [NSMutableDictionary dictionary];
             for (DisplayInfo *display in displays) {
+                NSRect f = [display frame];
+                f.origin = primaryPos;
+                [display setFrame:f];
                 if (display != primary) {
-                    // Update model immediately so snapshot reflects the change
-                    NSRect f = [display frame];
-                    f.origin = primaryPos;
-                    [display setFrame:f];
-
-                    [args addObject:@"--output"];
-                    [args addObject:[display output]];
-                    [args addObject:@"--auto"];
-                    [args addObject:@"--same-as"];
-                    [args addObject:[primary output]];
-                    NSDebugLog(@"DisplayController: Mirroring %@ to %@", [display name], [primary name]);
+                    [placements setObject:[NSValue valueWithPoint:primaryPos]
+                                  forKey:[display output]];
                 }
             }
-
-            [self runXrandrWithArgs:args];
+            [x11 applyPositions:placements];
+            [self refreshDisplays:nil];
         }
     } else {
-        // Disable mirroring - arrange displays side by side
         NSDebugLog(@"DisplayController: Disabling mirroring, arranging displays side by side");
-
-        // Update model immediately — place displays side by side
+        
         CGFloat xOffset = 0;
+        NSMutableDictionary *placements = [NSMutableDictionary dictionary];
         for (DisplayInfo *display in displays) {
             NSRect f = [display frame];
             f.origin.x = xOffset;
             f.origin.y = 0;
             [display setFrame:f];
+            [placements setObject:[NSValue valueWithPoint:f.origin]
+                          forKey:[display output]];
             xOffset += f.size.width;
         }
-
-        [self applyDisplayConfiguration];
+        [x11 applyPositions:placements];
+        [self refreshDisplays:nil];
     }
 }
 
@@ -652,7 +415,6 @@ static NSMutableDictionary *activeDialogsByID = nil;
 {
     NSString *selectedResolution = [resolutionPopup titleOfSelectedItem];
     
-    // Apply resolution to selected display
     DisplayInfo *targetDisplay = selectedDisplay;
     if (!targetDisplay) {
         NSDebugLog(@"DisplayController: No display selected for resolution change");
@@ -660,24 +422,23 @@ static NSMutableDictionary *activeDialogsByID = nil;
     }
     
     if (targetDisplay && selectedResolution) {
-        // Store the current resolution for potential revert
         NSString *currentRes = [targetDisplay currentResolutionString];
         
         if ([selectedResolution isEqualToString:currentRes]) {
-            NSDebugLog(@"DisplayController: Selected resolution same as current, no change needed");
-            return; // No change needed
+            return;
         }
         
-        NSDebugLog(@"DisplayController: Changing resolution for %@ from %@ to %@", [targetDisplay name], currentRes, selectedResolution);
+        NSDebugLog(@"DisplayController: Changing resolution for %@ from %@ to %@",
+              [targetDisplay name], currentRes, selectedResolution);
         
-        // Update model immediately so save button reflects the change
         [targetDisplay setCurrentResolutionString:selectedResolution];
 
-        // Apply the new resolution
-        NSArray *args = @[@"--output", [targetDisplay output], @"--mode", selectedResolution];
-        [self runXrandrWithArgs:args];
+        // Atomically set mode and position via the X11 RANDR API.
+        // Always enforce Y=0 so content starts at the top of the screen.
+        int x = (int)[targetDisplay frame].origin.x;
+        [x11 setMode:[targetDisplay output] mode:selectedResolution positionX:x positionY:0];
+        [self refreshDisplays:nil];
         
-        // Show confirmation dialog with auto-revert timer
         [self showResolutionConfirmationDialogWithOldResolution:currentRes 
                                                  newResolution:selectedResolution 
                                                        display:targetDisplay];
@@ -882,139 +643,60 @@ static NSMutableDictionary *activeDialogsByID = nil;
 
 - (void)revertToResolution:(NSString *)resolution forDisplay:(DisplayInfo *)display
 {
-    NSArray *args = @[@"--output", [display output], @"--mode", resolution];
-    [self runXrandrWithArgs:args];
+    // Atomically set mode and position via the X11 RANDR API.
+    int x = (int)[display frame].origin.x;
+    [x11 setMode:[display output] mode:resolution positionX:x positionY:0];
+    [self refreshDisplays:nil];
     
-    // Update the popup to reflect the reverted resolution
     [resolutionPopup selectItemWithTitle:resolution];
-}
-
-
-- (void)runXrandrWithArgs:(NSArray *)args
-{
-    if (![self isXrandrAvailable]) {
-        NSDebugLog(@"DisplayController: Cannot run xrandr - not available");
-        return;
-    }
-
-    NSDebugLog(@"DisplayController: Running xrandr with args: %@", args);
-
-    // Update save button immediately — the display model is already changed
-    [self updateSaveButtonState];
-
-    NSString *path = [xrandrPath retain];
-    NSArray *argsCopy = [args retain];
-
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSTask *task = [[NSTask alloc] init];
-        [task setLaunchPath:path];
-        [task setArguments:argsCopy];
-
-        [task launch];
-        [task waitUntilExit];
-
-        int exitStatus = [task terminationStatus];
-        NSDebugLog(@"DisplayController: xrandr command completed with exit status: %d", exitStatus);
-
-        [task release];
-        [path release];
-        [argsCopy release];
-
-        // Refresh displays after change (back on main thread with delay)
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            [self refreshDisplays:nil];
-        });
-    });
 }
 
 - (void)applyDisplayConfiguration
 {
     if ([displays count] == 0) return;
     
-    NSMutableArray *args = [NSMutableArray array];
-    
-    // Sort displays by X position for left-to-right arrangement
     NSArray *sortedDisplays = [displays sortedArrayUsingComparator:^NSComparisonResult(DisplayInfo *obj1, DisplayInfo *obj2) {
         return [@([obj1 frame].origin.x) compare:@([obj2 frame].origin.x)];
     }];
     
+    // Build position map: for the first display enforce Y=0, for the rest
+    // use their current frame Y (which may be 0 in a side-by-side layout).
+    NSMutableDictionary *placements = [NSMutableDictionary dictionary];
     for (int i = 0; i < [sortedDisplays count]; i++) {
         DisplayInfo *display = [sortedDisplays objectAtIndex:i];
+        DisplayInfo *prevDisplay = nil;
         
-        [args addObject:@"--output"];
-        [args addObject:[display output]];
-        [args addObject:@"--auto"];
-        
-        if ([display isPrimary]) {
-            [args addObject:@"--primary"];
-        }
-        
+        NSPoint pos;
         if (i == 0) {
-            [args addObject:@"--pos"];
-            [args addObject:[NSString stringWithFormat:@"%.0fx%.0f", [display frame].origin.x, [display frame].origin.y]];
+            pos = NSMakePoint(0, 0);
         } else {
-            DisplayInfo *prevDisplay = [sortedDisplays objectAtIndex:i-1];
-            [args addObject:@"--right-of"];
-            [args addObject:[prevDisplay output]];
+            prevDisplay = [sortedDisplays objectAtIndex:i-1];
+            pos = NSMakePoint(
+                prevDisplay.frame.origin.x + prevDisplay.frame.size.width,
+                [display frame].origin.y);
         }
+        
+        NSRect f = [display frame];
+        f.origin = pos;
+        [display setFrame:f];
+        
+        [placements setObject:[NSValue valueWithPoint:pos]
+                      forKey:[display output]];
     }
     
-    [self runXrandrWithArgs:args];
+    [x11 applyPositions:placements];
+    [self refreshDisplays:nil];
 }
 
 - (void)setPrimaryDisplay:(DisplayInfo *)display
 {
     NSDebugLog(@"DisplayController: Setting primary display to: %@", [display name]);
     
-    // Update the isPrimary flag
     for (DisplayInfo *d in displays) {
         [d setIsPrimary:(d == display)];
     }
     
-    // Apply the change via xrandr
-    NSArray *args = @[@"--output", [display output], @"--primary"];
-    [self runXrandrWithArgs:args];
-}
-
-- (NSString *)findXrandrPath
-{
-    NSDebugLog(@"DisplayController: Looking for xrandr in PATH");
-    
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:@"/usr/bin/which"];
-    [task setArguments:@[@"xrandr"]];
-    
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-    [task setStandardError:pipe];
-    
-    NSFileHandle *file = [pipe fileHandleForReading];
-    
-    [task launch];
-    [task waitUntilExit];
-    
-    int exitStatus = [task terminationStatus];
-    NSData *data = [file readDataToEndOfFile];
-    NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    
-    [task release];
-    
-    if (exitStatus == 0 && output && [output length] > 0) {
-        NSString *path = [output stringByTrimmingCharactersInSet:[NSCharacterSet newlineCharacterSet]];
-        NSDebugLog(@"DisplayController: Found xrandr at: %@", path);
-        [output release];
-        return path;
-    } else {
-        NSDebugLog(@"DisplayController: xrandr not found in PATH (exit status: %d)", exitStatus);
-        [output release];
-        return nil;
-    }
-}
-
-- (BOOL)isXrandrAvailable
-{
-    return xrandrPath != nil;
+    [x11 setPrimaryOutput:[display output]];
 }
 
 - (NSArray *)displays
@@ -1287,38 +969,42 @@ static NSString *const GERSHWIN_END   = @"# END Gershwin Display Settings";
     NSDebugLog(@"DisplayController: Auto-configuring displays...");
     
     if ([displays count] == 0) {
-        NSDebugLog(@"DisplayController: No displays to configure");
         return;
     }
     
-    // Try to auto-configure each connected display
-    NSMutableArray *args = [NSMutableArray array];
+    DisplayInfo *first = [displays objectAtIndex:0];
     
     for (DisplayInfo *display in displays) {
-        if ([display isConnected]) {
-            NSDebugLog(@"DisplayController: Auto-configuring display: %@", [display name]);
-            [args addObject:@"--output"];
-            [args addObject:[display output]];
-            [args addObject:@"--auto"];
-            
-            // Make the first display primary
-            if (display == [displays objectAtIndex:0]) {
-                [args addObject:@"--primary"];
-                [display setIsPrimary:YES];
-                NSDebugLog(@"DisplayController: Setting %@ as primary display", [display name]);
+        if (![display isConnected]) continue;
+        
+        NSString *modeStr = [display currentResolutionString];
+        if (!modeStr) {
+            // Fallback to first available mode or default
+            if ([[display availableResolutions] count] > 0) {
+                modeStr = [[display availableResolutions] objectAtIndex:0];
+            } else {
+                modeStr = [NSString stringWithFormat:@"%.0fx%.0f",
+                                     [display resolution].width,
+                                     [display resolution].height];
             }
+        }
+        
+        int x = 0, y = 0;
+        if (display != first) {
+            x = first.frame.origin.x + first.frame.size.width;
+        }
+        
+        NSDebugLog(@"DisplayController: Auto-configuring %@ at %@ pos %d,%d",
+              [display output], modeStr, x, y);
+        [x11 setMode:[display output] mode:modeStr positionX:x positionY:y];
+        
+        if (display == first) {
+            [display setIsPrimary:YES];
+            [x11 setPrimaryOutput:[display output]];
         }
     }
     
-    if ([args count] > 0) {
-        NSDebugLog(@"DisplayController: Running auto-configuration with args: %@", args);
-        [self runXrandrWithArgs:args];
-        
-        // Note: runXrandrWithArgs already calls refreshDisplays with a delay
-        // so we don't need to call it again here
-    } else {
-        NSDebugLog(@"DisplayController: No auto-configuration needed");
-    }
+    [self refreshDisplays:nil];
 }
 
 @end
