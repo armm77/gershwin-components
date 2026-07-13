@@ -19,6 +19,14 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
 - (BOOL)writeGovernor:(NSString *)gov;
 - (int)readBrightnessPercent;
 - (BOOL)writeBrightnessPercent:(int)pct;
+- (BOOL)readPreventSleep;
+- (BOOL)writePreventSleep:(BOOL)enable;
+- (BOOL)readHddSleep;
+- (BOOL)writeHddSleep:(BOOL)enable;
+- (BOOL)readWakeNetwork;
+- (BOOL)writeWakeNetwork:(BOOL)enable;
+- (BOOL)readPowerFail;
+- (BOOL)writePowerFail:(BOOL)enable;
 - (void)applyAllSettings;
 - (void)updateStatus:(NSString *)message;
 @end
@@ -30,6 +38,9 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     self = [super init];
     if (self) {
         isRefreshing = YES;
+        hddSleepState = NO;
+        wakeNetworkState = NO;
+        powerFailState = NO;
     }
     return self;
 }
@@ -39,11 +50,18 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [mainView release];
     [sourceLabel release];
     [batteryPercentLabel release];
-    [batteryIndicator release];
     [governorPopUp release];
     [brightnessSlider release];
     [brightnessLabel release];
     [blankPopUp release];
+    [preventSleepCheckbox release];
+    [hddSleepCheckbox release];
+    [wakeNetworkCheckbox release];
+    [powerFailCheckbox release];
+    if (inhibitTask) {
+        [inhibitTask terminate];
+        [inhibitTask release];
+    }
     [statusLabel release];
     [super dealloc];
 }
@@ -128,8 +146,7 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [mainView addSubview:sourceLabel];
     y -= 22;
 
-    // Battery percent label + level indicator
-    batteryPercentLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(labelX + 10, y, 100, rowH)];
+    batteryPercentLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(labelX + 10, y, 120, rowH)];
     [batteryPercentLabel setBezeled:NO];
     [batteryPercentLabel setEditable:NO];
     [batteryPercentLabel setSelectable:NO];
@@ -138,20 +155,6 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [batteryPercentLabel setFont:[NSFont systemFontOfSize:12]];
     [batteryPercentLabel setAutoresizingMask:NSViewMaxYMargin];
     [mainView addSubview:batteryPercentLabel];
-
-    batteryIndicator = [[NSLevelIndicator alloc] initWithFrame:NSMakeRect(controlX, y + 3, controlW, 16)];
-#ifdef GNUSTEP
-    // GNUstep uses warningLevel/tickMark for level indicator style
-    [batteryIndicator setWarningValue:75];
-    [batteryIndicator setCriticalValue:25];
-#else
-    [batteryIndicator setLevelIndicatorStyle:NSContinuousCapacityLevelIndicatorStyle];
-#endif
-    [batteryIndicator setMinValue:0];
-    [batteryIndicator setMaxValue:100];
-    [batteryIndicator setDoubleValue:0];
-    [batteryIndicator setAutoresizingMask:NSViewMaxYMargin];
-    [mainView addSubview:batteryIndicator];
     y -= 24;
 
     // ---- Separator ----
@@ -235,7 +238,6 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [brightnessSlider setFloatValue:100];
     [brightnessSlider setNumberOfTickMarks:11];
     [brightnessSlider setAllowsTickMarkValuesOnly:NO];
-    [brightnessSlider setContinuous:YES];
     [brightnessSlider setTarget:self];
     [brightnessSlider setAction:@selector(settingChanged:)];
     [brightnessSlider setAutoresizingMask:NSViewMaxYMargin];
@@ -278,6 +280,61 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [blankPopUp setAutoresizingMask:NSViewMaxYMargin];
     [mainView addSubview:blankPopUp];
 
+    // ---- Power Management Section ----
+    NSBox *sep3 = [[NSBox alloc] initWithFrame:NSMakeRect(labelX, y - 2, 520, 1)];
+    [sep3 setBoxType:NSBoxSeparator];
+    [sep3 setAutoresizingMask:NSViewMaxYMargin | NSViewWidthSizable];
+    [mainView addSubview:sep3];
+    [sep3 release];
+    y -= 16;
+
+    NSTextField *pmSection = [[NSTextField alloc] initWithFrame:NSMakeRect(labelX, y, 200, 18)];
+    [pmSection setBezeled:NO];
+    [pmSection setEditable:NO];
+    [pmSection setSelectable:NO];
+    [pmSection setDrawsBackground:NO];
+    [pmSection setStringValue:@"Power Management"];
+    [pmSection setFont:[NSFont boldSystemFontOfSize:13]];
+    [pmSection setAutoresizingMask:NSViewMaxYMargin];
+    [mainView addSubview:pmSection];
+    [pmSection release];
+    y -= 20;
+
+    preventSleepCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(labelX + 10, y, 510, rowH)];
+    [preventSleepCheckbox setButtonType:NSSwitchButton];
+    [preventSleepCheckbox setTitle:@"Prevent computer from sleeping when display is off"];
+    [preventSleepCheckbox setTarget:self];
+    [preventSleepCheckbox setAction:@selector(settingChanged:)];
+    [preventSleepCheckbox setAutoresizingMask:NSViewMaxYMargin];
+    [mainView addSubview:preventSleepCheckbox];
+    y -= 26;
+
+    hddSleepCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(labelX + 10, y, 510, rowH)];
+    [hddSleepCheckbox setButtonType:NSSwitchButton];
+    [hddSleepCheckbox setTitle:@"Put hard disks to sleep when possible"];
+    [hddSleepCheckbox setTarget:self];
+    [hddSleepCheckbox setAction:@selector(settingChanged:)];
+    [hddSleepCheckbox setAutoresizingMask:NSViewMaxYMargin];
+    [mainView addSubview:hddSleepCheckbox];
+    y -= 26;
+
+    wakeNetworkCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(labelX + 10, y, 510, rowH)];
+    [wakeNetworkCheckbox setButtonType:NSSwitchButton];
+    [wakeNetworkCheckbox setTitle:@"Wake for network access"];
+    [wakeNetworkCheckbox setTarget:self];
+    [wakeNetworkCheckbox setAction:@selector(settingChanged:)];
+    [wakeNetworkCheckbox setAutoresizingMask:NSViewMaxYMargin];
+    [mainView addSubview:wakeNetworkCheckbox];
+    y -= 26;
+
+    powerFailCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(labelX + 10, y, 510, rowH)];
+    [powerFailCheckbox setButtonType:NSSwitchButton];
+    [powerFailCheckbox setTitle:@"Start up automatically after a power failure"];
+    [powerFailCheckbox setTarget:self];
+    [powerFailCheckbox setAction:@selector(settingChanged:)];
+    [powerFailCheckbox setAutoresizingMask:NSViewMaxYMargin];
+    [mainView addSubview:powerFailCheckbox];
+
     // Status label at the bottom
     statusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(labelX, 6, 520, 26)];
     [statusLabel setBezeled:NO];
@@ -316,7 +373,10 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
 
     // -- Brightness --
     int brightness = (int)[brightnessSlider intValue];
-    [self writeBrightnessPercent:brightness];
+    [brightnessLabel setStringValue:[NSString stringWithFormat:@"%d%%", brightness]];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+        [self writeBrightnessPercent:brightness];
+    });
 
     // -- Screen blank --
     int blankSeconds = 0;
@@ -342,6 +402,40 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
         [self runCommand:@"/usr/bin/xset" args:[NSArray arrayWithObjects:@"+dpms", nil]];
     }
 
+    // -- Prevent sleep --
+    BOOL newPrevent = ([preventSleepCheckbox state] == NSControlStateValueOn);
+    if (newPrevent != preventSleepState) {
+        [self writePreventSleep:newPrevent];
+        preventSleepState = newPrevent;
+    }
+
+    // -- Hard disk sleep --
+    BOOL newHdd = ([hddSleepCheckbox state] == NSControlStateValueOn);
+    if (newHdd != hddSleepState) {
+        hddSleepState = newHdd;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+            [self writeHddSleep:newHdd];
+        });
+    }
+
+    // -- Wake for network --
+    BOOL newWake = ([wakeNetworkCheckbox state] == NSControlStateValueOn);
+    if (newWake != wakeNetworkState) {
+        wakeNetworkState = newWake;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+            [self writeWakeNetwork:newWake];
+        });
+    }
+
+    // -- Power failure restart --
+    BOOL newPower = ([powerFailCheckbox state] == NSControlStateValueOn);
+    if (newPower != powerFailState) {
+        powerFailState = newPower;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+            [self writePowerFail:newPower];
+        });
+    }
+
     // -- Persist --
     [self persistSettings];
     [self updateStatus:@"Applied"];
@@ -354,7 +448,6 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     // -- Power source / battery --
     NSDictionary *batt = [self readBatteryInfo];
     NSString *source = [batt objectForKey:@"source"];
-    int percent = [[batt objectForKey:@"percent"] intValue];
     NSString *status = [batt objectForKey:@"status"];
 
     if ([source isEqualToString:@"AC"]) {
@@ -369,12 +462,11 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
         [sourceLabel setStringValue:@"Source: Unknown"];
     }
 
-    if (percent >= 0) {
-        [batteryPercentLabel setStringValue:[NSString stringWithFormat:@"Battery: %d%%", percent]];
-        [batteryIndicator setDoubleValue:percent];
+    int battPct = [[batt objectForKey:@"percent"] intValue];
+    if (battPct >= 0) {
+        [batteryPercentLabel setStringValue:[NSString stringWithFormat:@"Battery: %d%%", battPct]];
     } else {
         [batteryPercentLabel setStringValue:@"Battery: N/A"];
-        [batteryIndicator setDoubleValue:0];
     }
 
     // -- CPU Governor --
@@ -422,6 +514,16 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
         [blankPopUp selectItemWithTitle:@"Never"];
     }
 
+    // -- Power Management --
+    preventSleepState = [self readPreventSleep];
+    [preventSleepCheckbox setState:preventSleepState ? NSControlStateValueOn : NSControlStateValueOff];
+    hddSleepState = NO;
+    wakeNetworkState = NO;
+    powerFailState = NO;
+    [hddSleepCheckbox setState:NSControlStateValueOff];
+    [wakeNetworkCheckbox setState:NSControlStateValueOff];
+    [powerFailCheckbox setState:NSControlStateValueOff];
+
     // -- Override with persisted user defaults --
     {
         NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -438,6 +540,31 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
             if (val) {
                 [blankPopUp selectItemAtIndex:[val intValue]];
             }
+
+            val = [persisted objectForKey:@"preventSleep"];
+            if (val) {
+                BOOL on = [val boolValue];
+                if (on != preventSleepState) {
+                    preventSleepState = on;
+                    [self writePreventSleep:on];
+                }
+                [preventSleepCheckbox setState:on ? NSControlStateValueOn : NSControlStateValueOff];
+            }
+            val = [persisted objectForKey:@"hddSleep"];
+            if (val) {
+                hddSleepState = [val boolValue];
+                [hddSleepCheckbox setState:hddSleepState ? NSControlStateValueOn : NSControlStateValueOff];
+            }
+            val = [persisted objectForKey:@"wakeNetwork"];
+            if (val) {
+                wakeNetworkState = [val boolValue];
+                [wakeNetworkCheckbox setState:wakeNetworkState ? NSControlStateValueOn : NSControlStateValueOff];
+            }
+            val = [persisted objectForKey:@"powerFail"];
+            if (val) {
+                powerFailState = [val boolValue];
+                [powerFailCheckbox setState:powerFailState ? NSControlStateValueOn : NSControlStateValueOff];
+            }
         }
     }
 
@@ -451,6 +578,10 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [domain setObject:[[governorPopUp selectedItem] title] forKey:@"governor"];
     [domain setObject:[NSNumber numberWithInt:[brightnessSlider intValue]] forKey:@"brightness"];
     [domain setObject:[NSNumber numberWithInt:[blankPopUp indexOfSelectedItem]] forKey:@"screenBlank"];
+    [domain setObject:[NSNumber numberWithBool:([preventSleepCheckbox state] == NSControlStateValueOn)] forKey:@"preventSleep"];
+    [domain setObject:[NSNumber numberWithBool:([hddSleepCheckbox state] == NSControlStateValueOn)] forKey:@"hddSleep"];
+    [domain setObject:[NSNumber numberWithBool:([wakeNetworkCheckbox state] == NSControlStateValueOn)] forKey:@"wakeNetwork"];
+    [domain setObject:[NSNumber numberWithBool:([powerFailCheckbox state] == NSControlStateValueOn)] forKey:@"powerFail"];
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setPersistentDomain:domain forName:kEnergyDomain];
     [defaults synchronize];
@@ -657,6 +788,151 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
 #endif
 }
 
+#pragma mark - Power Management
+
+- (BOOL)readPreventSleep
+{
+    return (inhibitTask != nil && [inhibitTask isRunning]);
+}
+
+- (BOOL)writePreventSleep:(BOOL)enable
+{
+#if defined(__linux__)
+    if (enable) {
+        if (inhibitTask && [inhibitTask isRunning]) return YES;
+        if (inhibitTask) {
+            [inhibitTask terminate];
+            [inhibitTask release];
+        }
+        inhibitTask = [[NSTask alloc] init];
+        [inhibitTask setLaunchPath:@"/usr/bin/systemd-inhibit"];
+        [inhibitTask setArguments:[NSArray arrayWithObjects:
+            @"--what=sleep",
+            @"--who=EnergyPreferences",
+            @"--why=User preference",
+            @"sleep", @"infinity", nil]];
+        [inhibitTask launch];
+    } else {
+        if (inhibitTask) {
+            [inhibitTask terminate];
+            [inhibitTask release];
+            inhibitTask = nil;
+        }
+    }
+    return YES;
+#else
+    return YES;
+#endif
+}
+
+- (BOOL)readHddSleep
+{
+#if defined(__linux__)
+    NSArray *disks = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/sys/block" error:NULL];
+    for (NSString *d in disks) {
+        if ([d hasPrefix:@"sd"] || [d hasPrefix:@"nvme"]) {
+            NSString *devPath = [NSString stringWithFormat:@"/dev/%@", d];
+            NSString *out = [self runCommand:@"/usr/sbin/hdparm"
+                                        args:[NSArray arrayWithObjects:@"-B", devPath, nil]];
+            if ([out length] == 0) continue;
+            NSScanner *scanner = [NSScanner scannerWithString:out];
+            if ([scanner scanUpToString:@"APM_level" intoString:nil]) {
+                int apm = 255;
+                [scanner scanInt:&apm];
+                if (apm >= 1 && apm <= 127) return YES;
+            }
+        }
+    }
+    return NO;
+#else
+    return NO;
+#endif
+}
+
+- (BOOL)writeHddSleep:(BOOL)enable
+{
+#if defined(__linux__)
+    NSArray *disks = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/sys/block" error:NULL];
+    for (NSString *d in disks) {
+        if ([d hasPrefix:@"sd"] || [d hasPrefix:@"nvme"]) {
+            NSString *devPath = [NSString stringWithFormat:@"/dev/%@", d];
+            NSString *apmVal = enable ? @"1" : @"254";
+            NSString *sdVal = enable ? @"120" : @"0";
+            [self runCommand:@"/bin/sh"
+                        args:[NSArray arrayWithObjects:@"-c",
+                              [NSString stringWithFormat:@"/usr/bin/sudo /usr/sbin/hdparm -B %@ -S %@ '%@' > /dev/null 2>&1",
+                               apmVal, sdVal, devPath], nil]];
+        }
+    }
+    return YES;
+#else
+    return YES;
+#endif
+}
+
+- (BOOL)readWakeNetwork
+{
+#if defined(__linux__)
+    NSArray *interfaces = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/sys/class/net" error:NULL];
+    for (NSString *iface in interfaces) {
+        if ([iface isEqualToString:@"lo"]) continue;
+        NSString *out = [self runCommand:@"/usr/sbin/ethtool"
+                                    args:[NSArray arrayWithObjects:iface, nil]];
+        if ([out rangeOfString:@"Wake-on: g"].location != NSNotFound) return YES;
+        if ([out rangeOfString:@"Wake-on: p"].location != NSNotFound) return YES;
+    }
+    return NO;
+#else
+    return NO;
+#endif
+}
+
+- (BOOL)writeWakeNetwork:(BOOL)enable
+{
+#if defined(__linux__)
+    NSArray *interfaces = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/sys/class/net" error:NULL];
+    for (NSString *iface in interfaces) {
+        if ([iface isEqualToString:@"lo"]) continue;
+        NSString *wol = enable ? @"g" : @"d";
+        [self runCommand:@"/bin/sh"
+                    args:[NSArray arrayWithObjects:@"-c",
+                          [NSString stringWithFormat:@"/usr/bin/sudo /usr/sbin/ethtool -s '%@' wol %@ > /dev/null 2>&1",
+                           iface, wol], nil]];
+    }
+    return YES;
+#else
+    return YES;
+#endif
+}
+
+- (BOOL)readPowerFail
+{
+#if defined(__linux__)
+    NSString *wakealarm = [self readFile:@"/sys/class/rtc/rtc0/wakealarm"];
+    return ([wakealarm length] > 0 && ![wakealarm isEqualToString:@"0"]);
+#else
+    return NO;
+#endif
+}
+
+- (BOOL)writePowerFail:(BOOL)enable
+{
+#if defined(__linux__)
+    if (enable) {
+        time_t now = time(NULL);
+        time_t then = now + 86400;
+        [self writeSysfs:@"/sys/class/rtc/rtc0/wakealarm" value:@"0"];
+        [self writeSysfs:@"/sys/class/rtc/rtc0/wakealarm"
+                   value:[NSString stringWithFormat:@"%ld", (long)then]];
+    } else {
+        [self writeSysfs:@"/sys/class/rtc/rtc0/wakealarm" value:@"0"];
+    }
+    return YES;
+#else
+    return YES;
+#endif
+}
+
 #pragma mark - Polling
 
 - (void)pollBattery
@@ -680,7 +956,6 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
 
             if (percent >= 0) {
                 [batteryPercentLabel setStringValue:[NSString stringWithFormat:@"Battery: %d%%", percent]];
-                [batteryIndicator setDoubleValue:percent];
             }
         });
     });

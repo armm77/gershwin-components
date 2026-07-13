@@ -13,8 +13,6 @@
     // Power Source
     NSTextField *sourceLabel;
     NSTextField *batteryPercentLabel;
-    NSLevelIndicator *batteryIndicator;
-
     // CPU
     NSPopUpButton *governorPopUp;
 
@@ -23,10 +21,21 @@
     NSTextField *brightnessLabel;
     NSPopUpButton *blankPopUp;
 
+    // Power Management
+    NSButton *preventSleepCheckbox;
+    NSButton *hddSleepCheckbox;
+    NSButton *wakeNetworkCheckbox;
+    NSButton *powerFailCheckbox;
+
     // Status
     NSTextField *statusLabel;
 
     BOOL isRefreshing;
+    NSTask *inhibitTask;
+    BOOL preventSleepState;
+    BOOL hddSleepState;
+    BOOL wakeNetworkState;
+    BOOL powerFailState;
 }
 
 - (NSView *)createMainView;
