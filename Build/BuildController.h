@@ -34,9 +34,13 @@
 @property (strong) NSString *makefilePath;
 @property (strong) NSMutableString *buildOutput;
 @property BOOL consoleMode;
+@property BOOL autoInstallLaunch;
+@property BOOL keepBuildDir;
+@property (strong) NSString *buildDir;
 @property (strong) NSArray *extraArgs;
 
 - (void)showWindow;
+- (void)showProgressWindow;
 - (void)startBuild;
 - (void)showLog:(id)sender;
 

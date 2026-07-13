@@ -316,6 +316,20 @@ static const CGFloat kSpace16 = 16.0;
     }
 }
 
+- (void)showProgressWindow
+{
+    NSLog(@"showProgressWindow: DISPLAY=%s makefilePath=%@", getenv("DISPLAY"), makefilePath);
+    if (!getenv("DISPLAY")) {
+        return;
+    }
+
+    NSLog(@"showProgressWindow: calling setupMenu");
+    [self setupMenu];
+
+    NSLog(@"showProgressWindow: calling createProgressWindow");
+    [self createProgressWindow];
+}
+
 #pragma mark - Actions
 
 - (void)cancelClicked:(id)sender
@@ -801,6 +815,20 @@ static const CGFloat kSpace16 = 16.0;
         exit(status == 0 ? 0 : status);
     }
 
+    if (self.autoInstallLaunch) {
+        if (status == 0) {
+            NSString *ext = [self productExtensionFromMakefile];
+            BOOL canLaunch = [ext isEqualToString:@"app"] || [ext isEqualToString:@"prefPane"];
+            NSLog(@"autoInstallLaunch: status=0, canLaunch=%d", canLaunch);
+            [self startInstallWithLaunch:canLaunch];
+        } else {
+            [_logController appendLog:[NSString stringWithFormat:
+                @"\n=== Build failed (exit %d) ===\n\n", status]];
+            [NSApp terminate:self];
+        }
+        return;
+    }
+
     // After successful build, embed dependency libraries into the app bundle
     if (status == 0 && _dependencyResolved) {
         NSString *appName = [self productNameFromMakefile];
@@ -1062,15 +1090,13 @@ static const CGFloat kSpace16 = 16.0;
                 if ([ext isEqualToString:@"prefPane"]) {
                     [[NSWorkspace sharedWorkspace] launchApplication:@"SystemPreferences"];
                 } else {
-                    NSString *exec = [productPath stringByAppendingPathComponent:
-                        [[productPath lastPathComponent] stringByDeletingPathExtension]];
-                    if ([[NSFileManager defaultManager] isExecutableFileAtPath:exec]) {
-                        [NSTask launchedTaskWithLaunchPath:exec arguments:@[]];
-                    }
+                    [[NSWorkspace sharedWorkspace] launchApplication:productPath];
                 }
-                [self performSelector:@selector(terminateAfterDelay)
-                           withObject:nil
-                           afterDelay:3.0];
+                if (!self.keepBuildDir) {
+                    [self cleanupCatalogBuildDir];
+                }
+                [self cleanupTempDir];
+                [NSApp terminate:self];
                 return;
             }
         }
@@ -1606,6 +1632,14 @@ static const CGFloat kSpace16 = 16.0;
     if (_objDir) {
         [[NSFileManager defaultManager] removeItemAtPath:_objDir error:NULL];
         _objDir = nil;
+    }
+}
+
+- (void)cleanupCatalogBuildDir
+{
+    if (self.buildDir) {
+        [[NSFileManager defaultManager] removeItemAtPath:self.buildDir error:NULL];
+        self.buildDir = nil;
     }
 }
 

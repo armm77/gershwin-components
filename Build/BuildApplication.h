@@ -9,9 +9,13 @@
 @interface BuildApplication : NSApplication <NSApplicationDelegate>
 {
     NSString *makefilePath;
+    NSString *catalogBuildName;
 }
 
 @property (retain) NSString *makefilePath;
 @property (retain) NSArray *extraArgs;
+@property (retain) NSString *catalogBuildName;
+@property BOOL autoInstallLaunch;
+@property BOOL keepBuildDir;
 
 @end

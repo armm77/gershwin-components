@@ -8,6 +8,7 @@
 #import <Foundation/Foundation.h>
 #import "BuildApplication.h"
 #import "BuildController.h"
+#import "CatalogEntry.h"
 
 int main(int argc, const char *argv[])
 {
@@ -16,20 +17,37 @@ int main(int argc, const char *argv[])
         // Use -makefilePath flag so NSApp doesn't treat it as a file to open
         NSArray *args = [[NSProcessInfo processInfo] arguments];
         NSString *makefilePath = nil;
+        NSString *catalogBuildName = nil;
         NSMutableArray *extraArgs = [NSMutableArray array];
+        BOOL noGui = NO;
+        BOOL autoInstallLaunch = NO;
+        BOOL keepBuildDir = NO;
         BOOL nextIsMakefile = NO;
+        BOOL nextIsCatalog = NO;
         for (NSUInteger i = 1; i < [args count]; i++) {
             NSString *arg = [args objectAtIndex: i];
             if ([arg isEqualToString: @"-makefilePath"]) {
                 nextIsMakefile = YES;
             } else if ([arg isEqualToString: @"-GSFilePath"]) {
                 nextIsMakefile = YES;
+            } else if ([arg isEqualToString: @"-catalogBuildName"]) {
+                nextIsCatalog = YES;
+            } else if ([arg isEqualToString: @"-autoInstallLaunch"]) {
+                autoInstallLaunch = YES;
+            } else if ([arg isEqualToString: @"-keepBuildDir"]) {
+                keepBuildDir = YES;
+            } else if ([arg isEqualToString: @"-noGui"]) {
+                noGui = YES;
             } else if ([arg isEqualToString: @"-h"] || [arg isEqualToString: @"-help"]) {
-                fprintf(stdout, "Usage: %s [-makefilePath <GNUmakefile>] [extra gmake args...]\n"
+                fprintf(stdout, "Usage: %s [-makefilePath <GNUmakefile>] [-catalogBuildName <name>] [-noGui] [-autoInstallLaunch] [-keepBuildDir] [extra gmake args...]\n"
                                 "\n"
                                 "Options:\n"
-                                "  -makefilePath <path>  Path to the GNUmakefile to build\n"
-                                "  -h, -help            Show this help message\n"
+                                "  -makefilePath <path>    Path to the GNUmakefile to build\n"
+                                "  -catalogBuildName <name> Build an app from the catalog by name\n"
+                                "  -noGui                  Force console mode (no progress window)\n"
+                                "  -autoInstallLaunch      Automatically install and launch on success\n"
+                                "  -keepBuildDir           Keep temporary build directory after success\n"
+                                "  -h, -help              Show this help message\n"
                                 "\n"
                                 "The build always runs 'make clean' first.\n"
                                 "In GUI mode, use the file dialog if no path is given.\n",
@@ -38,15 +56,83 @@ int main(int argc, const char *argv[])
             } else if (nextIsMakefile) {
                 makefilePath = arg;
                 nextIsMakefile = NO;
+            } else if (nextIsCatalog) {
+                catalogBuildName = arg;
+                nextIsCatalog = NO;
             } else {
                 [extraArgs addObject: arg];
             }
         }
 
-        BOOL hasDisplay = (getenv("DISPLAY") != NULL);
+        BOOL hasDisplay = (getenv("DISPLAY") != NULL) && !noGui;
 
         if (!hasDisplay) {
             // Console mode, run build directly without GUI
+            if (catalogBuildName) {
+                // Catalog build mode: find entry, clone, and build
+                NSArray *entries = [CatalogEntry loadCatalog];
+                CatalogEntry *entry = nil;
+                for (CatalogEntry *e in entries) {
+                    if ([[e.name lowercaseString] isEqualToString:[catalogBuildName lowercaseString]]) {
+                        entry = e;
+                        break;
+                    }
+                }
+                if (!entry) {
+                    fprintf(stderr, "Error: catalog entry '%s' not found.\n", [catalogBuildName UTF8String]);
+                    fprintf(stderr, "Available entries:");
+                    for (CatalogEntry *e in entries) {
+                        fprintf(stderr, " %s", [e.name UTF8String]);
+                    }
+                    fprintf(stderr, "\n");
+                    exit(1);
+                }
+
+                NSString *template = [NSString stringWithFormat:@"/tmp/Build-catalog-%@-XXXXXXXX",
+                                      [entry.name stringByReplacingOccurrencesOfString:@" " withString:@"_"]];
+                char *tmpPath = strdup([template UTF8String]);
+                if (!mkdtemp(tmpPath)) {
+                    fprintf(stderr, "Error: could not create temporary directory.\n");
+                    exit(1);
+                }
+                NSString *cloneDir = [[NSString stringWithUTF8String:tmpPath] stringByStandardizingPath];
+                free(tmpPath);
+
+                fprintf(stderr, "Cloning %s...\n", [entry.gitURL UTF8String]);
+                NSTask *gitTask = [[NSTask alloc] init];
+                [gitTask setLaunchPath:@"/usr/bin/git"];
+                [gitTask setArguments:@[@"clone", @"--depth=1", entry.gitURL, cloneDir]];
+                [gitTask setStandardOutput:[NSFileHandle fileHandleWithNullDevice]];
+                [gitTask setStandardError:[NSFileHandle fileHandleWithNullDevice]];
+                @try {
+                    [gitTask launch];
+                    [gitTask waitUntilExit];
+                } @catch (NSException *e) {
+                    fprintf(stderr, "Error: git clone failed: %s\n", [[e reason] UTF8String]);
+                    exit(1);
+                }
+                if ([gitTask terminationStatus] != 0) {
+                    fprintf(stderr, "Error: git clone returned status %d.\n", [gitTask terminationStatus]);
+                    exit(1);
+                }
+
+                NSFileManager *fm = [NSFileManager defaultManager];
+                for (NSString *name in @[@"GNUmakefile", @"GNUmakefile.in", @"Makefile"]) {
+                    NSString *mf = [cloneDir stringByAppendingPathComponent:name];
+                    if ([fm fileExistsAtPath:mf]) {
+                        makefilePath = mf;
+                        break;
+                    }
+                }
+                if (!makefilePath) {
+                    fprintf(stderr, "Error: no GNUmakefile or Makefile found in cloned repository.\n");
+                    exit(1);
+                }
+                fprintf(stderr, "Found makefile: %s\n", [makefilePath UTF8String]);
+
+                // Fall through to the makefilePath build logic below
+            }
+
             if (makefilePath) {
                 NSString *dir = [makefilePath stringByDeletingLastPathComponent];
                 if ([dir length] == 0) dir = @".";
@@ -133,7 +219,11 @@ int main(int argc, const char *argv[])
                 }
                 exit([task terminationStatus]);
             } else {
-                fprintf(stderr, "Usage: %s -makefilePath <GNUmakefile> [extra gmake args...]\n",
+                fprintf(stderr, "Usage: %s -makefilePath <GNUmakefile> [extra gmake args...]\n"
+                                "   or: %s -catalogBuildName <name> [extra gmake args...]\n"
+                                "   or: %s [-noGui] -catalogBuildName <name> [extra gmake args...]\n",
+                        [[args objectAtIndex: 0] UTF8String],
+                        [[args objectAtIndex: 0] UTF8String],
                         [[args objectAtIndex: 0] UTF8String]);
                 exit(1);
             }
@@ -143,6 +233,9 @@ int main(int argc, const char *argv[])
             [app setDelegate: app];
             [(BuildApplication *)app setMakefilePath: makefilePath];
             [(BuildApplication *)app setExtraArgs: extraArgs];
+            [(BuildApplication *)app setCatalogBuildName: catalogBuildName];
+            [(BuildApplication *)app setAutoInstallLaunch: autoInstallLaunch];
+            [(BuildApplication *)app setKeepBuildDir: keepBuildDir];
             [app run];
         }
         return 0;
