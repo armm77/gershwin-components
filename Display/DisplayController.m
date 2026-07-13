@@ -433,15 +433,15 @@ static NSMutableDictionary *activeDialogsByID = nil;
         
         [targetDisplay setCurrentResolutionString:selectedResolution];
 
-        // Atomically set mode and position via the X11 RANDR API.
-        // Always enforce Y=0 so content starts at the top of the screen.
         int x = (int)[targetDisplay frame].origin.x;
         [x11 setMode:[targetDisplay output] mode:selectedResolution positionX:x positionY:0];
-        [self refreshDisplays:nil];
-        
-        [self showResolutionConfirmationDialogWithOldResolution:currentRes 
-                                                 newResolution:selectedResolution 
+
+        // Show dialog BEFORE refreshDisplays: so targetDisplay is still valid.
+        // refreshDisplaces replaces all DisplayInfo objects.
+        [self showResolutionConfirmationDialogWithOldResolution:currentRes
+                                                 newResolution:selectedResolution
                                                        display:targetDisplay];
+        [self refreshDisplays:nil];
     }
 }
 
