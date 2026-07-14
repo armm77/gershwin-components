@@ -6,6 +6,18 @@
 
 #import "BuildController.h"
 
+#pragma mark - Background queue
+
+dispatch_queue_t buildQueue(void)
+{
+    static dispatch_queue_t _buildQueue = NULL;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        _buildQueue = dispatch_queue_create("Build.buildQueue", DISPATCH_QUEUE_SERIAL);
+    });
+    return _buildQueue;
+}
+
 #pragma mark - Metrics (from AppearanceMetrics.h)
 
 static const CGFloat kWinWidth = 400.0;
@@ -24,7 +36,7 @@ static const CGFloat kSpace16 = 16.0;
 
 #pragma mark - BWLogWindowController
 
-@interface BWLogWindowController : NSWindowController
+@interface BWLogWindowController ()
 {
     NSScrollView *_scrollView;
     NSTextView *_logView;
@@ -123,6 +135,9 @@ static const CGFloat kSpace16 = 16.0;
 @implementation BuildController
 
 @synthesize makefilePath;
+@synthesize closeCount;
+@synthesize closeTimer;
+@synthesize logController = _logController;
 
 - (id)init
 {
@@ -191,6 +206,10 @@ static const CGFloat kSpace16 = 16.0;
     [windowMenu addItemWithTitle:@"Bring All to Front"
                           action:@selector(arrangeInFront:)
                    keyEquivalent:@""];
+    [windowMenu addItem:[NSMenuItem separatorItem]];
+    [windowMenu addItemWithTitle:@"Close"
+                          action:@selector(performClose:)
+                   keyEquivalent:@"w"];
     [windowMenuItem setSubmenu:windowMenu];
     [NSApp setWindowsMenu:windowMenu];
 
@@ -330,6 +349,13 @@ static const CGFloat kSpace16 = 16.0;
     [self createProgressWindow];
 }
 
+- (void)hideProgressWindow
+{
+    if (_window) {
+        [_window orderOut:nil];
+    }
+}
+
 #pragma mark - Actions
 
 - (void)cancelClicked:(id)sender
@@ -366,7 +392,7 @@ static const CGFloat kSpace16 = 16.0;
 #pragma mark - Build
 
 - (BOOL)runSyncTask:(NSString *)launchPath arguments:(NSArray *)args
-          directory:(NSString *)dir logPrefix:(NSString *)prefix
+           directory:(NSString *)dir logPrefix:(NSString *)prefix
 {
     NSTask *task = [[NSTask alloc] init];
     [task setCurrentDirectoryPath:dir];
@@ -379,7 +405,9 @@ static const CGFloat kSpace16 = 16.0;
     [task setStandardError:pipe];
 
     NSString *log = [NSString stringWithFormat:@"=== %@ ===\n", prefix];
-    [_logController appendLog:log];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [_logController appendLog:log];
+    });
     write(STDOUT_FILENO, [log UTF8String], [log length]);
 
     @try {
@@ -391,7 +419,9 @@ static const CGFloat kSpace16 = 16.0;
             if ([data length] > 0) {
                 NSString *outStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
                 [self.buildOutput appendString:outStr];
-                [_logController appendLog:outStr];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [_logController appendLog:outStr];
+                });
                 write(STDOUT_FILENO, [data bytes], [data length]);
             }
         }
@@ -400,14 +430,18 @@ static const CGFloat kSpace16 = 16.0;
         if ([remaining length] > 0) {
             NSString *outStr = [[NSString alloc] initWithData:remaining encoding:NSUTF8StringEncoding];
             [self.buildOutput appendString:outStr];
-            [_logController appendLog:outStr];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [_logController appendLog:outStr];
+            });
             write(STDOUT_FILENO, [remaining bytes], [remaining length]);
         }
 
         return [task terminationStatus] == 0;
     } @catch (NSException *exception) {
         NSString *err = [NSString stringWithFormat:@"%@ failed: %@\n", prefix, [exception reason]];
-        [_logController appendLog:err];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [_logController appendLog:err];
+        });
         write(STDOUT_FILENO, [err UTF8String], [err length]);
         return NO;
     }
@@ -445,7 +479,9 @@ static const CGFloat kSpace16 = 16.0;
     }
 
     if (needsAutoreconf) {
-        if (_statusField) [_statusField setStringValue:@"Running autoreconf…"];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (_statusField) [_statusField setStringValue:@"Running autoreconf\u2026"];
+        });
         NSString *autoreconfPath = [NSTask launchPathForTool:@"autoreconf"];
         if (autoreconfPath) {
             BOOL ok = [self runSyncTask:autoreconfPath
@@ -453,7 +489,9 @@ static const CGFloat kSpace16 = 16.0;
                               directory:directory
                               logPrefix:@"autoreconf"];
             if (!ok) {
-                if (_statusField) [_statusField setStringValue:@"autoreconf failed"];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (_statusField) [_statusField setStringValue:@"autoreconf failed"];
+                });
                 return;
             }
         }
@@ -474,13 +512,17 @@ static const CGFloat kSpace16 = 16.0;
         }
         if (needsConfigure) {
             if ([fm isExecutableFileAtPath:configure]) {
-                if (_statusField) [_statusField setStringValue:@"Running configure…"];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (_statusField) [_statusField setStringValue:@"Running configure\u2026"];
+                });
                 [self runSyncTask:configure
                         arguments:@[]
                         directory:directory
                         logPrefix:@"configure"];
             } else if ([fm fileExistsAtPath:configure]) {
-                if (_statusField) [_statusField setStringValue:@"Running configure (sh)…"];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (_statusField) [_statusField setStringValue:@"Running configure (sh)\u2026"];
+                });
                 [self runSyncTask:@"/bin/sh"
                         arguments:@[configure]
                         directory:directory
@@ -927,9 +969,7 @@ static const CGFloat kSpace16 = 16.0;
     } else if (status != 0 && button == NSAlertSecondButtonReturn) {
         NSLog(@"buildFinished: Show Build Log");
         [self showLog:nil];
-    } else if (status != 0 && button == NSAlertFirstButtonReturn) {
-        NSLog(@"buildFinished: Cancel -> quit");
-    } else if (status != 0 && button == NSAlertFirstButtonReturn) {
+    } else {
         NSLog(@"buildFinished: Cancel -> quit");
         [self cleanupTempDir];
         [NSApp stop:self];
@@ -1090,7 +1130,7 @@ static const CGFloat kSpace16 = 16.0;
                 if ([ext isEqualToString:@"prefPane"]) {
                     [[NSWorkspace sharedWorkspace] launchApplication:@"SystemPreferences"];
                 } else {
-                    [[NSWorkspace sharedWorkspace] launchApplication:productPath];
+                    [[NSWorkspace sharedWorkspace] launchApplication:name];
                 }
                 if (!self.keepBuildDir) {
                     [self cleanupCatalogBuildDir];
@@ -2095,10 +2135,84 @@ static const CGFloat kSpace16 = 16.0;
     _dependencyResolved = YES;
 }
 
+- (BOOL)windowShouldClose:(NSWindow *)sender
+{
+    if (sender != _window) return YES;
+
+    BOOL busy = (buildTask && [buildTask isRunning]) || (installTask && [installTask isRunning]);
+    if (!busy) return YES;
+
+    closeCount++;
+    if (closeCount == 1) {
+        [closeTimer invalidate];
+        closeTimer = [NSTimer scheduledTimerWithTimeInterval:3.0
+                                                      target:self
+                                                    selector:@selector(closeTimerFired:)
+                                                    userInfo:nil
+                                                     repeats:NO];
+        if (_statusField) {
+            [_statusField setStringValue:@"Press Close again to force quit."];
+        }
+        return NO;
+    }
+
+    // Second attempt: show dialog immediately
+    [closeTimer invalidate];
+    closeTimer = nil;
+    closeCount = 0;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:@"Force Quit?"];
+    [alert setInformativeText:@"Build is still in progress. Force quit?"];
+    [alert addButtonWithTitle:@"Force Quit"];
+    [alert addButtonWithTitle:@"Wait"];
+    NSInteger result = [alert runModal];
+    if (result == NSAlertFirstButtonReturn) {
+        if (buildTask && [buildTask isRunning]) [buildTask terminate];
+        if (installTask && [installTask isRunning]) [installTask terminate];
+        return YES;
+    }
+    if (_statusField) {
+        [_statusField setStringValue:@"Building\u2026"];
+    }
+    return NO;
+}
+
+- (void)closeTimerFired:(NSTimer *)timer
+{
+    closeTimer = nil;
+    closeCount = 0;
+
+    BOOL busy = (buildTask && [buildTask isRunning]) || (installTask && [installTask isRunning]);
+    if (!busy) {
+        [_window close];
+        return;
+    }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:@"Force Quit?"];
+    [alert setInformativeText:@"Build is still in progress. Force quit?"];
+    [alert addButtonWithTitle:@"Force Quit"];
+    [alert addButtonWithTitle:@"Wait"];
+    NSInteger result = [alert runModal];
+    if (result == NSAlertFirstButtonReturn) {
+        if (buildTask && [buildTask isRunning]) [buildTask terminate];
+        if (installTask && [installTask isRunning]) [installTask terminate];
+        [_window close];
+    } else {
+        if (_statusField) {
+            [_statusField setStringValue:@"Building\u2026"];
+        }
+    }
+}
+
 - (void)windowWillClose:(NSNotification *)notification
 {
     NSWindow *closingWindow = [notification object];
     if (closingWindow == _window) {
+        [closeTimer invalidate];
+        closeTimer = nil;
+        closeCount = 0;
         [self cleanupTempDir];
         if (buildTask && [buildTask isRunning]) {
             [buildTask terminate];

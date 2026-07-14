@@ -11,11 +11,24 @@
 
 @implementation BuildApplication
 
+- (id)init
+{
+    self = [super init];
+    if (self) {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(applicationWillTerminate:)
+                                                     name:NSApplicationWillTerminateNotification
+                                                   object:nil];
+    }
+    return self;
+}
+
 @synthesize makefilePath;
 @synthesize extraArgs;
 @synthesize catalogBuildName;
 @synthesize autoInstallLaunch;
 @synthesize keepBuildDir;
+@synthesize currentController = _currentController;
 
 - (BOOL)applicationShouldOpenUntitledFile:(NSApplication *)sender
 {
@@ -65,10 +78,10 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(applicationWillTerminate:)
-                                                 name:NSApplicationWillTerminateNotification
-                                               object:nil];
+}
+
+- (void)startBuildWorkflow
+{
     if (self.catalogBuildName) {
         [self buildCatalogAppWithName:self.catalogBuildName];
     } else if (self.makefilePath) {
@@ -77,9 +90,11 @@
         [controller setExtraArgs:self.extraArgs];
         [controller setAutoInstallLaunch:self.autoInstallLaunch];
         [controller setKeepBuildDir:self.keepBuildDir];
+        self.currentController = controller;
         [controller showWindow];
     } else {
         CatalogController *catalog = [[CatalogController alloc] init];
+        self.currentController = catalog;
         [catalog showWindow];
     }
 }
@@ -126,58 +141,118 @@
     [controller setAutoInstallLaunch:self.autoInstallLaunch];
     [controller setKeepBuildDir:self.keepBuildDir];
     [controller setBuildDir:cloneDir];
+    self.currentController = controller;
     [controller showProgressWindow];
     [NSApp updateWindows];
 
-    /* Clone the repository */
-    NSTask *gitTask = [[NSTask alloc] init];
-    [gitTask setLaunchPath:@"/usr/bin/git"];
-    [gitTask setArguments:@[@"clone", @"--depth=1", entry.gitURL, cloneDir]];
-    [gitTask setStandardOutput:[NSFileHandle fileHandleWithNullDevice]];
-    [gitTask setStandardError:[NSFileHandle fileHandleWithNullDevice]];
+    /* Clone the repository on a background queue to keep GUI responsive */
+    dispatch_async(buildQueue(), ^{
+        NSTask *gitTask = [[NSTask alloc] init];
+        [gitTask setLaunchPath:@"/usr/bin/git"];
+        [gitTask setArguments:@[@"clone", @"--depth=1", entry.gitURL, cloneDir]];
+        [gitTask setEnvironment:[[NSProcessInfo processInfo] environment]];
 
-    @try {
-        [gitTask launch];
-        [gitTask waitUntilExit];
-    } @catch (NSException *e) {
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:@"Clone Failed"];
-        [alert setInformativeText:[NSString stringWithFormat:@"git clone failed: %@", [e reason]]];
-        [alert addButtonWithTitle:@"OK"];
-        [alert runModal];
-        return;
-    }
+        NSPipe *gitPipe = [[NSPipe alloc] init];
+        [gitTask setStandardOutput:gitPipe];
+        [gitTask setStandardError:gitPipe];
 
-    if ([gitTask terminationStatus] != 0) {
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:@"Clone Failed"];
-        [alert setInformativeText:@"git clone returned an error."];
-        [alert addButtonWithTitle:@"OK"];
-        [alert runModal];
-        return;
-    }
+        NSString *logMsg = [NSString stringWithFormat:@"=== Cloning %@ ===\n", entry.gitURL];
+        [controller.buildOutput appendString:logMsg];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [controller.logController appendLog:logMsg];
+        });
+        write(STDOUT_FILENO, [logMsg UTF8String], [logMsg length]);
 
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *resolvedMakefile = nil;
-    for (NSString *mfName in @[@"GNUmakefile", @"GNUmakefile.in", @"Makefile"]) {
-        NSString *mf = [cloneDir stringByAppendingPathComponent:mfName];
-        if ([fm fileExistsAtPath:mf]) {
-            resolvedMakefile = mf;
-            break;
+        BOOL cloneOK = YES;
+        @try {
+            [gitTask launch];
+
+            NSFileHandle *handle = [gitPipe fileHandleForReading];
+            while ([gitTask isRunning]) {
+                NSData *data = [handle availableData];
+                if ([data length] > 0) {
+                    NSString *outStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                    [controller.buildOutput appendString:outStr];
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [controller.logController appendLog:outStr];
+                    });
+                    write(STDOUT_FILENO, [data bytes], [data length]);
+                }
+            }
+            NSData *remaining = [handle readDataToEndOfFile];
+            if ([remaining length] > 0) {
+                NSString *outStr = [[NSString alloc] initWithData:remaining encoding:NSUTF8StringEncoding];
+                [controller.buildOutput appendString:outStr];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [controller.logController appendLog:outStr];
+                });
+                write(STDOUT_FILENO, [remaining bytes], [remaining length]);
+            }
+        } @catch (NSException *e) {
+            cloneOK = NO;
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                [controller hideProgressWindow];
+                NSAlert *alert = [[NSAlert alloc] init];
+                [alert setMessageText:@"Clone Failed"];
+                [alert setInformativeText:[NSString stringWithFormat:@"git clone failed: %@", [e reason]]];
+                [alert addButtonWithTitle:@"OK"];
+                [alert runModal];
+                [NSApp terminate:nil];
+            });
         }
-    }
 
-    if (!resolvedMakefile) {
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:@"No Makefile Found"];
-        [alert setInformativeText:@"The cloned repository does not contain a GNUmakefile or Makefile."];
-        [alert addButtonWithTitle:@"OK"];
-        [alert runModal];
-        return;
-    }
+        if (cloneOK && [gitTask terminationStatus] != 0) {
+            cloneOK = NO;
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                [controller hideProgressWindow];
+                NSAlert *alert = [[NSAlert alloc] init];
+                [alert setMessageText:@"Clone Failed"];
+                [alert setInformativeText:@"git clone returned an error."];
+                [alert addButtonWithTitle:@"OK"];
+                [alert runModal];
+                [NSApp terminate:nil];
+            });
+        }
 
-    [controller setMakefilePath:resolvedMakefile];
-    [controller startBuild];
+        if (cloneOK) {
+            NSFileManager *fm = [NSFileManager defaultManager];
+            NSString *resolvedMakefile = nil;
+
+            if (entry.makefilePath) {
+                NSString *mf = [cloneDir stringByAppendingPathComponent:entry.makefilePath];
+                if ([fm fileExistsAtPath:mf]) {
+                    resolvedMakefile = mf;
+                }
+            }
+
+            if (!resolvedMakefile) {
+                for (NSString *mfName in @[@"GNUmakefile", @"GNUmakefile.in", @"Makefile"]) {
+                    NSString *mf = [cloneDir stringByAppendingPathComponent:mfName];
+                    if ([fm fileExistsAtPath:mf]) {
+                        resolvedMakefile = mf;
+                        break;
+                    }
+                }
+            }
+
+            if (!resolvedMakefile) {
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    [controller hideProgressWindow];
+                    NSAlert *alert = [[NSAlert alloc] init];
+                    [alert setMessageText:@"No Makefile Found"];
+                    [alert setInformativeText:@"The cloned repository does not contain a GNUmakefile or Makefile."];
+                    [alert addButtonWithTitle:@"OK"];
+                    [alert runModal];
+                    [NSApp terminate:nil];
+                });
+            } else {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [controller setMakefilePath:resolvedMakefile];
+                    [controller startBuild];
+                });
+            }
+        }
+    });
 }
 
 @end

@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>Name</key>
+		<string>AnClock</string>
+		<key>GitURL</key>
+		<string>https://github.com/erincodepirate/gs_analog_clock</string>
+		<key>Description</key>
+		<string>Analog clock app for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Brutus</string>
+		<key>GitURL</key>
+		<string>https://github.com/neoncortex/Brutus</string>
+		<key>Description</key>
+		<string>A brutish text editor for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Calculate</string>
+		<key>GitURL</key>
+		<string>https://github.com/anthonyc-r/Calculate</string>
+		<key>Description</key>
+		<string>Calculator app</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Calendar</string>
+		<key>GitURL</key>
+		<string>https://github.com/AlessandroSangiuliano/Calendar</string>
+		<key>Description</key>
+		<string>Calendar app for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Camera</string>
+		<key>GitURL</key>
+		<string>https://github.com/gsimageapps/Camera</string>
+		<key>Description</key>
+		<string>Camera app for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>CellConnect</string>
+		<key>GitURL</key>
+		<string>https://github.com/eukara/CellConnect.app</string>
+		<key>Description</key>
+		<string>Frontend for KDE Connect on GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Clock</string>
+		<key>GitURL</key>
+		<string>https://github.com/anthonyc-r/Clock</string>
+		<key>Description</key>
+		<string>A simple analog clock</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Clock (eric)</string>
+		<key>GitURL</key>
+		<string>https://github.com/erincodepirate/gs_clock</string>
+		<key>Description</key>
+		<string>Clock app for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>EasyDiff</string>
+		<key>GitURL</key>
+		<string>https://github.com/gnustep/apps-easydiff</string>
+		<key>Description</key>
+		<string>Diff/merge tool for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Fortunate</string>
+		<key>GitURL</key>
+		<string>https://github.com/alexmyczko/Fortunate.app</string>
+		<key>Description</key>
+		<string>Graphical front-end to BSD fortune</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Gem</string>
+		<key>GitURL</key>
+		<string>https://github.com/anthonyc-r/Gem</string>
+		<key>Description</key>
+		<string>A simple text editor for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Ggtd</string>
+		<key>GitURL</key>
+		<string>https://github.com/routoure/GGTD</string>
+		<key>Description</key>
+		<string>GTD task manager for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Gomoku</string>
+		<key>GitURL</key>
+		<string>https://github.com/gomoku/Gomoku.app-GNUstep</string>
+		<key>Description</key>
+		<string>Extended TicTacToe game for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Mail</string>
+		<key>GitURL</key>
+		<string>https://github.com/onflapp/gs-mail</string>
+		<key>Description</key>
+		<string>Mail app for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>MediaPlayer</string>
+		<key>GitURL</key>
+		<string>https://github.com/anthonyc-r/MediaPlayer</string>
+		<key>Description</key>
+		<string>A simple GNUstep mpv front end</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>ModPlugPlay</string>
+		<key>GitURL</key>
+		<string>https://github.com/alexmyczko/ModPlugPlay.app</string>
+		<key>Description</key>
+		<string>libmodplug/libopenmpt player for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>MPlayer</string>
+		<key>GitURL</key>
+		<string>https://github.com/eukara/MPlayer.app</string>
+		<key>Description</key>
+		<string>MPlayer front-end for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Notepad (anthonyc-r)</string>
+		<key>GitURL</key>
+		<string>https://github.com/anthonyc-r/Notepad</string>
+		<key>Description</key>
+		<string>Notepad app using GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Notepad (thomasf)</string>
+		<key>GitURL</key>
+		<string>https://github.com/thomasfuhringer/notepad.app</string>
+		<key>Description</key>
+		<string>Notepad with tabs for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>SmallNote</string>
+		<key>GitURL</key>
+		<string>https://github.com/hsnamr/SmallNote</string>
+		<key>Description</key>
+		<string>A note-taking app for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>StepBill</string>
+		<key>GitURL</key>
+		<string>https://github.com/alexmyczko/StepBill.app</string>
+		<key>Description</key>
+		<string>Port of MacBill/xbill to GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Sudedito</string>
+		<key>GitURL</key>
+		<string>https://github.com/richRemer/Sudedito</string>
+		<key>Description</key>
+		<string>Editor for sudoers files on GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>SurfBoard</string>
+		<key>GitURL</key>
+		<string>https://github.com/anthonyc-r/SurfBoard</string>
+		<key>Description</key>
+		<string>A desktop imageboard browser</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Terminal</string>
+		<key>GitURL</key>
+		<string>https://github.com/anthonyc-r/Terminal</string>
+		<key>Description</key>
+		<string>A terminal app for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Terminal (onflapp)</string>
+		<key>GitURL</key>
+		<string>https://github.com/onflapp/gs-terminal</string>
+		<key>Description</key>
+		<string>Terminal app for GNUstep Desktop</string>
+		<key>MakefilePath</key>
+		<string>Terminal/GNUmakefile</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>TextEdit</string>
+		<key>GitURL</key>
+		<string>https://github.com/onflapp/gs-textedit</string>
+		<key>Description</key>
+		<string>Text editor for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Thematic</string>
+		<key>GitURL</key>
+		<string>https://github.com/gnustep/apps-thematic</string>
+		<key>Description</key>
+		<string>Create image-only themes for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>ThemePreview</string>
+		<key>GitURL</key>
+		<string>https://github.com/gnustep/apps-themepreview</string>
+		<key>Description</key>
+		<string>Theme preview window with widgets</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>TopBar</string>
+		<key>GitURL</key>
+		<string>https://github.com/gnustep/apps-topbar</string>
+		<key>Description</key>
+		<string>A persistent bar at the top of the screen</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>VolumeControl</string>
+		<key>GitURL</key>
+		<string>https://github.com/alexmyczko/VolumeControl.app</string>
+		<key>Description</key>
+		<string>Volume control app for GNUstep</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Weather</string>
+		<key>GitURL</key>
+		<string>https://github.com/anthonyc-r/Weather</string>
+		<key>Description</key>
+		<string>Weather app</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Weather (paulo)</string>
+		<key>GitURL</key>
+		<string>https://github.com/paulodelgado/Weather.app</string>
+		<key>Description</key>
+		<string>GNUStep Weather app</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>WebBrowser</string>
+		<key>GitURL</key>
+		<string>https://github.com/onflapp/gs-webbrowser</string>
+		<key>Description</key>
+		<string>Web browser for GNUstep Desktop</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>World Clock</string>
+		<key>GitURL</key>
+		<string>https://github.com/mrtonik/Clock</string>
+		<key>Description</key>
+		<string>World clock, alarms, stopwatch, and timer</string>
+	</dict>
+</array>
+</plist>

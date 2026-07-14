@@ -11,35 +11,30 @@
 + (NSArray *)loadCatalog
 {
     NSBundle *bundle = [NSBundle mainBundle];
-    NSString *resDir = [bundle resourcePath];
-    if (!resDir) return @[];
+    NSString *catalogPath = [[bundle resourcePath] stringByAppendingPathComponent:@"Catalog.plist"];
+    NSArray *entries = [NSArray arrayWithContentsOfFile:catalogPath];
+    if (!entries) return @[];
 
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSArray *files = [fm contentsOfDirectoryAtPath:resDir error:NULL];
-    NSMutableArray *entries = [NSMutableArray array];
-
-    for (NSString *file in files) {
-        if (![[file pathExtension] isEqualToString:@"plist"]) continue;
-        NSString *path = [resDir stringByAppendingPathComponent:file];
-        NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:path];
-        if (!dict) continue;
-
-        NSString *name = [dict objectForKey:@"Name"];
-        NSString *gitURL = [dict objectForKey:@"GitURL"];
-        if ([name length] == 0 || [gitURL length] == 0) continue;
+    NSMutableArray *result = [NSMutableArray array];
+    for (id item in entries) {
+        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        NSString *name = [item objectForKey:@"Name"];
+        NSString *gitURL = [item objectForKey:@"GitURL"];
+        if (!name || [name length] == 0 || !gitURL || [gitURL length] == 0) continue;
 
         CatalogEntry *entry = [[CatalogEntry alloc] init];
         entry.name = name;
         entry.gitURL = gitURL;
-        entry.desc = [dict objectForKey:@"Description"];
-        [entries addObject:entry];
+        entry.desc = [item objectForKey:@"Description"];
+        entry.makefilePath = [item objectForKey:@"MakefilePath"];
+        [result addObject:entry];
     }
 
-    [entries sortUsingComparator:^NSComparisonResult(CatalogEntry *a, CatalogEntry *b) {
+    [result sortUsingComparator:^NSComparisonResult(CatalogEntry *a, CatalogEntry *b) {
         return [a.name localizedCaseInsensitiveCompare:b.name];
     }];
 
-    return entries;
+    return result;
 }
 
 @end

@@ -8,6 +8,10 @@
 
 @class BWLogWindowController;
 
+@interface BWLogWindowController : NSWindowController
+- (void)appendLog:(NSString *)text;
+@end
+
 @interface BuildController : NSObject <NSWindowDelegate>
 {
     NSWindow *_window;
@@ -29,6 +33,8 @@
     NSInteger _currentProjectIndex;
     NSString *_objDir;
     BOOL _dependencyResolved;
+    NSInteger _closeCount;
+    NSTimer *_closeTimer;
 }
 
 @property (strong) NSString *makefilePath;
@@ -38,9 +44,16 @@
 @property BOOL keepBuildDir;
 @property (strong) NSString *buildDir;
 @property (strong) NSArray *extraArgs;
+@property NSInteger closeCount;
+@property (strong) NSTimer *closeTimer;
+
+@property (readonly) BWLogWindowController *logController;
+
+dispatch_queue_t buildQueue(void);
 
 - (void)showWindow;
 - (void)showProgressWindow;
+- (void)hideProgressWindow;
 - (void)startBuild;
 - (void)showLog:(id)sender;
 

@@ -10,6 +10,7 @@
 {
     NSString *makefilePath;
     NSString *catalogBuildName;
+    id _currentController;
 }
 
 @property (retain) NSString *makefilePath;
@@ -17,5 +18,8 @@
 @property (retain) NSString *catalogBuildName;
 @property BOOL autoInstallLaunch;
 @property BOOL keepBuildDir;
+@property (retain) id currentController;
+
+- (void)startBuildWorkflow;
 
 @end

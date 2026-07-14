@@ -23,10 +23,7 @@ Build_RESOURCE_FILES = \
 	Resources/check.png \
 	Resources/Blacklist.plist \
 	Resources/GNUstep.info.plist \
-	Resources/Catalog/Clock.plist \
-	Resources/Catalog/Calculate.plist \
-	Resources/Catalog/Weather.plist \
-	Resources/Catalog/StepDown.plist \
+	Resources/Catalog.plist \
 	Info-gnustep.plist
 
 include $(GNUSTEP_MAKEFILES)/application.make

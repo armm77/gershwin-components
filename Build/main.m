@@ -236,6 +236,8 @@ int main(int argc, const char *argv[])
             [(BuildApplication *)app setCatalogBuildName: catalogBuildName];
             [(BuildApplication *)app setAutoInstallLaunch: autoInstallLaunch];
             [(BuildApplication *)app setKeepBuildDir: keepBuildDir];
+            [app finishLaunching];
+            [app startBuildWorkflow];
             [app run];
         }
         return 0;
