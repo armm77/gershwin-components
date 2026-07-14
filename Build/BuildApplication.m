@@ -152,9 +152,10 @@
         [gitTask setArguments:@[@"clone", @"--depth=1", entry.gitURL, cloneDir]];
         [gitTask setEnvironment:[[NSProcessInfo processInfo] environment]];
 
-        NSPipe *gitPipe = [[NSPipe alloc] init];
-        [gitTask setStandardOutput:gitPipe];
-        [gitTask setStandardError:gitPipe];
+    NSPipe *gitPipe = [[NSPipe alloc] init];
+    [gitTask setStandardOutput:gitPipe];
+    [gitTask setStandardError:gitPipe];
+    [gitTask setStandardInput:[NSFileHandle fileHandleWithNullDevice]];
 
         NSString *logMsg = [NSString stringWithFormat:@"=== Cloning %@ ===\n", entry.gitURL];
         [controller.buildOutput appendString:logMsg];

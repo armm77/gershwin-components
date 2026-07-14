@@ -422,6 +422,7 @@ static const CGFloat kSpace16 = 16.0;
     NSPipe *pipe = [[NSPipe alloc] init];
     [task setStandardOutput:pipe];
     [task setStandardError:pipe];
+    [task setStandardInput:[NSFileHandle fileHandleWithNullDevice]];
 
     NSString *log = [NSString stringWithFormat:@"=== %@ ===\n", prefix];
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -745,6 +746,7 @@ static const CGFloat kSpace16 = 16.0;
     outputPipe = [[NSPipe alloc] init];
     [buildTask setStandardOutput:outputPipe];
     [buildTask setStandardError:outputPipe];
+    [buildTask setStandardInput:[NSFileHandle fileHandleWithNullDevice]];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(taskDidTerminate:)
@@ -1034,6 +1036,7 @@ static const CGFloat kSpace16 = 16.0;
     installPipe = [[NSPipe alloc] init];
     [installTask setStandardOutput:installPipe];
     [installTask setStandardError:installPipe];
+    [installTask setStandardInput:[NSFileHandle fileHandleWithNullDevice]];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(installDidTerminate:)
