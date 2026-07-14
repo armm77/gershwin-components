@@ -54,6 +54,7 @@ dispatch_queue_t buildQueue(void);
 - (void)showWindow;
 - (void)showProgressWindow;
 - (void)hideProgressWindow;
+- (void)reloadIcon;
 - (void)startBuild;
 - (void)showLog:(id)sender;
 

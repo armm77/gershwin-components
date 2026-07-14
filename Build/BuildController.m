@@ -356,6 +356,25 @@ static const CGFloat kSpace16 = 16.0;
     }
 }
 
+- (void)reloadIcon
+{
+    if (!_iconView) return;
+    NSImage *icon = [self productIconFromMakefile];
+    if (!icon) {
+        icon = [[NSWorkspace sharedWorkspace] iconForFileType:@"app"];
+    }
+    if (icon) {
+        NSImage *displayIcon = [[NSImage alloc] initWithSize:NSMakeSize(kIconSide, kIconSide)];
+        [displayIcon lockFocus];
+        [icon drawInRect:NSMakeRect(0, 0, kIconSide, kIconSide)
+                fromRect:NSZeroRect
+               operation:NSCompositeSourceOver
+                fraction:1.0];
+        [displayIcon unlockFocus];
+        [_iconView setImage:displayIcon];
+    }
+}
+
 #pragma mark - Actions
 
 - (void)cancelClicked:(id)sender

@@ -248,6 +248,7 @@
             } else {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [controller setMakefilePath:resolvedMakefile];
+                    [controller reloadIcon];
                     [controller startBuild];
                 });
             }

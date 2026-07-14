@@ -294,6 +294,7 @@ static const CGFloat kWinHeight = 260.0;
             } else {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [controller setMakefilePath:makefilePath];
+                    [controller reloadIcon];
                     [controller startBuild];
                 });
             }
