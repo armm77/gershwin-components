@@ -188,6 +188,14 @@
 	</dict>
 	<dict>
 		<key>Name</key>
+		<string>SystemEmulator</string>
+		<key>GitURL</key>
+		<string>https://github.com/probonopd/SystemEmulator</string>
+		<key>Description</key>
+		<string>A GNUstep desktop frontend for QEMU</string>
+	</dict>
+	<dict>
+		<key>Name</key>
 		<string>Terminal</string>
 		<key>GitURL</key>
 		<string>https://github.com/anthonyc-r/Terminal</string>
