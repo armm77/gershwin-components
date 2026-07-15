@@ -356,6 +356,42 @@ static NSArray *ethernetPrefixes(void)
     }
 }
 
+- (int)runPrivilegedCommand:(NSString *)path arguments:(NSArray *)args output:(NSString **)output
+{
+    NSTask *task = [[NSTask alloc] init];
+    if (sudoPath) {
+        [task setLaunchPath:sudoPath];
+        NSMutableArray *sudoArgs = [NSMutableArray arrayWithObjects:@"-A", @"-E", path, nil];
+        if (args) {
+            [sudoArgs addObjectsFromArray:args];
+        }
+        [task setArguments:sudoArgs];
+    } else {
+        [task setLaunchPath:path];
+        [task setArguments:args];
+    }
+
+    NSPipe *outPipe = [NSPipe pipe];
+    [task setStandardOutput:outPipe];
+    [task setStandardError:[NSPipe pipe]];
+
+    int status = -1;
+    @try {
+        [task launch];
+        [task waitUntilExit];
+        status = [task terminationStatus];
+        if (output) {
+            NSData *data = [[outPipe fileHandleForReading] readDataToEndOfFile];
+            *output = data ? [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease] : nil;
+        }
+    } @catch (NSException *e) {
+        NSDebugLLog(@"gwcomp", @"[Network] BSDBackend: exception running privileged command %@: %@", path, e);
+        if (output) *output = nil;
+    }
+    [task release];
+    return status;
+}
+
 #pragma mark - NetworkBackend Protocol - Identification
 
 - (NSString *)backendName
@@ -365,7 +401,8 @@ static NSArray *ethernetPrefixes(void)
 
 - (NSString *)backendVersion
 {
-    NSString *output = [self runCommand:ifconfigPath arguments:@[@"--version"]];
+    NSString *output = nil;
+    [self runPrivilegedCommand:ifconfigPath arguments:@[@"--version"] output:&output];
     /* ifconfig on FreeBSD doesn't have --version; return OS version instead */
     if (!output || [output length] == 0) {
         NSString *unameOutput = nil;
@@ -395,7 +432,8 @@ static NSArray *ethernetPrefixes(void)
      * On FreeBSD: ifconfig -l returns a space-separated list of interfaces.
      * On Linux this may not be available, but BSDBackend is only used on FreeBSD.
      */
-    NSString *output = [self runCommand:ifconfigPath arguments:@[@"-l"]];
+    NSString *output = nil;
+    [self runPrivilegedCommand:ifconfigPath arguments:@[@"-l"] output:&output];
     if (!output || [output length] == 0) {
         return @[];
     }
@@ -541,7 +579,7 @@ static NSArray *ethernetPrefixes(void)
 
     /* Try to get default gateway from routing table */
     NSString *routeOutput = nil;
-    (void)[self runCommandWithStatus:@"/usr/bin/netstat"
+    (void)[self runPrivilegedCommand:@"/usr/bin/netstat"
                            arguments:@[@"-rn", @"-f", @"inet"]
                               output:&routeOutput];
     if (routeOutput) {
@@ -595,7 +633,8 @@ static NSArray *ethernetPrefixes(void)
 
 - (NetworkInterface *)parseInterfaceDetails:(NSString *)ifaceName
 {
-    NSString *output = [self runCommand:ifconfigPath arguments:@[ifaceName]];
+    NSString *output = nil;
+    [self runPrivilegedCommand:ifconfigPath arguments:@[ifaceName] output:&output];
     if (!output || [output length] == 0) return nil;
 
     NetworkInterface *iface = [[[NetworkInterface alloc] init] autorelease];
@@ -892,8 +931,10 @@ static NSArray *ethernetPrefixes(void)
 
     /* Check sysctl net.wlan.devices for physical wireless devices */
     if (sysctlPath) {
-        NSString *output = [self runCommand:sysctlPath
-                                  arguments:@[@"net.wlan.devices"]];
+        NSString *output = nil;
+        [self runPrivilegedCommand:sysctlPath
+                        arguments:@[@"net.wlan.devices"]
+                           output:&output];
         if (output) {
             output = [output stringByTrimmingCharactersInSet:
                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -962,8 +1003,10 @@ static NSArray *ethernetPrefixes(void)
         return wifiEnabled;
     }
 
-    NSString *output = [self runCommand:ifconfigPath
-                              arguments:@[primaryWLANDevice]];
+    NSString *output = nil;
+    [self runPrivilegedCommand:ifconfigPath
+                    arguments:@[primaryWLANDevice]
+                       output:&output];
     if (output) {
         wifiEnabled = ([output rangeOfString:@"<UP,"
                                      options:NSCaseInsensitiveSearch].location != NSNotFound ||
@@ -1016,7 +1059,7 @@ static NSArray *ethernetPrefixes(void)
 
     /* Try ifconfig scan first */
     NSString *scanOutput = nil;
-    int status = [self runCommandWithStatus:ifconfigPath
+    int status = [self runPrivilegedCommand:ifconfigPath
                                  arguments:@[primaryWLANDevice, @"list", @"scan"]
                                     output:&scanOutput];
 
@@ -1027,12 +1070,13 @@ static NSArray *ethernetPrefixes(void)
     /* If ifconfig scan didn't work, try wpa_cli */
     if ([networks count] == 0 && wpaCliPath) {
         /* Trigger scan */
-        [self runCommand:wpaCliPath arguments:@[@"-i", primaryWLANDevice, @"scan"]];
+        [self runPrivilegedCommand:wpaCliPath arguments:@[@"-i", primaryWLANDevice, @"scan"] output:NULL];
         [NSThread sleepForTimeInterval:2.0];
 
-        NSString *wpaOutput = [self runCommand:wpaCliPath
-                                     arguments:@[@"-i", primaryWLANDevice,
-                                                 @"scan_results"]];
+        NSString *wpaOutput = nil;
+        [self runPrivilegedCommand:wpaCliPath
+                        arguments:@[@"-i", primaryWLANDevice, @"scan_results"]
+                           output:&wpaOutput];
         if (wpaOutput && [wpaOutput length] > 0) {
             networks = (NSMutableArray *)[self parseWpaCliScanResults:wpaOutput];
         }
@@ -1214,8 +1258,10 @@ static NSArray *ethernetPrefixes(void)
 
     /* Check which network is currently connected */
     if (primaryWLANDevice) {
-        NSString *ifOutput = [self runCommand:ifconfigPath
-                                    arguments:@[primaryWLANDevice]];
+        NSString *ifOutput = nil;
+        [self runPrivilegedCommand:ifconfigPath
+                        arguments:@[primaryWLANDevice]
+                           output:&ifOutput];
         if (ifOutput) {
             /* Look for "ssid MyNetwork" in ifconfig output */
             NSArray *ifLines = [ifOutput componentsSeparatedByString:@"\n"];
