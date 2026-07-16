@@ -56,14 +56,6 @@
     [startupDiskController setMainView:mainView];
     NSDebugLLog(@"gwcomp", @"StartupDiskPane: Set main view on controller");
     
-    // Set up a timer to refresh the boot entries periodically
-    refreshTimer = [NSTimer scheduledTimerWithTimeInterval:5.0
-                                                    target:self
-                                                  selector:@selector(refreshBootEntries)
-                                                  userInfo:nil
-                                                   repeats:YES];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: Created refresh timer = %@", refreshTimer);
-    
     NSDebugLLog(@"gwcomp", @"StartupDiskPane: About to call refreshBootEntries");
     [self refreshBootEntries];
     NSDebugLLog(@"gwcomp", @"StartupDiskPane: mainViewDidLoad completed");
@@ -76,15 +68,43 @@
     NSDebugLLog(@"gwcomp", @"StartupDiskPane: refreshBootEntries completed");
 }
 
-- (void)willUnselect
+- (void)startRefreshTimer
 {
-    [refreshTimer invalidate];
-    refreshTimer = nil;
+    if (!refreshTimer) {
+        refreshTimer = [NSTimer scheduledTimerWithTimeInterval:5.0
+                                                        target:self
+                                                      selector:@selector(refreshBootEntries)
+                                                      userInfo:nil
+                                                       repeats:YES];
+        [refreshTimer retain];
+    }
+}
+
+- (void)stopRefreshTimer
+{
+    if (refreshTimer) {
+        [refreshTimer invalidate];
+        [refreshTimer release];
+        refreshTimer = nil;
+    }
+}
+
+- (void)didSelect
+{
+    [super didSelect];
+    [self refreshBootEntries];
+    [self startRefreshTimer];
+}
+
+- (void)didUnselect
+{
+    [super didUnselect];
+    [self stopRefreshTimer];
 }
 
 - (void)dealloc
 {
-    [refreshTimer invalidate];
+    [self stopRefreshTimer];
     [startupDiskController release];
     [super dealloc];
 }

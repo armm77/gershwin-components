@@ -73,6 +73,7 @@
     [super didSelect];
     // Refresh data when the pane is selected
     [controller refreshInterfaces:nil];
+    [self startRefreshTimer];
     [self setInitialKeyView:nil];
 }
 
