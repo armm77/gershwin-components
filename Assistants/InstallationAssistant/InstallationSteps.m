@@ -1008,7 +1008,6 @@ NSString *IACheckImageSourceAvailable(void)
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [((id<DockService>)_dockProxy) setProgressVisible:NO];
-    [_dockProxy release];
     [_etaTimer invalidate];
     [_etaTimer release];
     [_startTime release];
@@ -1075,7 +1074,7 @@ NSString *IACheckImageSourceAvailable(void)
     // Connect to Dock DO service for progress bar in icon
     if (_dockProxy == nil) {
         NSConnection *conn = [NSConnection connectionWithRegisteredName:@"DockIcon" host:nil];
-        _dockProxy = [[conn rootProxy] retain];
+        _dockProxy = [conn rootProxy];
     }
 
     _isRunning = YES;
