@@ -335,8 +335,6 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         return;
     }
 
-    Atom windowTypeAtom = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
-    Atom dockAtom = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DOCK", False);
     Atom strutAtom = XInternAtom(display, "_NET_WM_STRUT", False);
     Atom strutPartialAtom = XInternAtom(display, "_NET_WM_STRUT_PARTIAL", False);
     Atom stateAtom = XInternAtom(display, "_NET_WM_STATE", False);
@@ -370,9 +368,6 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         if (topStrut == 0) {
             topStrut = fallbackHeight;
         }
-
-        XChangeProperty(display, menuBarWindow, windowTypeAtom, XA_ATOM, 32,
-                        PropModeReplace, (unsigned char *)&dockAtom, 1);
 
         unsigned long strut[4] = {0, 0, topStrut, 0};
         unsigned long strutPartial[12] = {0, 0, topStrut, 0,
@@ -709,7 +704,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
                                               defer:NO];
     NSDebugLLog(@"gwcomp", @"MenuController: Created NSWindow: %@", self.menuBar);
     
-    [self.menuBar setTitle:@"MenuBar"];
+    [self.menuBar setTitle:@"Menu"];
     [self.menuBar setBackgroundColor:color];
     [self.menuBar setAlphaValue:1.0];
     [self.menuBar setLevel:NSMainMenuWindowLevel + 1]; // Higher than main menu, but not floating
