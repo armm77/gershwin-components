@@ -84,6 +84,8 @@ static BOOL _detectALSA(void)
     }
     return NO;
 }
+#else
+static BOOL _detectALSA(void) { return NO; }
 #endif /* __linux__ */
 
 static BOOL _detectOSS(void)
