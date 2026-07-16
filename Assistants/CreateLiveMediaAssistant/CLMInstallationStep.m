@@ -9,6 +9,11 @@
 #import "CLMDiskUtility.h"
 #import "GSAssistantFramework.h"
 
+@protocol DockService
+- (void)setProgressValue:(double)value;
+- (void)setProgressVisible:(BOOL)visible;
+@end
+
 @implementation CLMInstallationStep
 
 @synthesize controller = _controller;
@@ -46,6 +51,8 @@
 - (void)dealloc
 {
     NSDebugLLog(@"gwcomp", @"CLMInstallationStep: dealloc");
+    [((id<DockService>)_dockProxy) setProgressVisible:NO];
+    [_dockProxy release];
     if (_streamOp) {
         [_streamOp cancel];
     }
@@ -110,6 +117,12 @@
     if (_installationInProgress) {
         NSDebugLLog(@"gwcomp", @"CLMInstallationStep: Installation already in progress");
         return;
+    }
+
+    // Connect to Dock DO service for progress bar in icon
+    if (_dockProxy == nil) {
+        NSConnection *conn = [NSConnection connectionWithRegisteredName:@"com.canonical.Unity.LauncherEntry" host:nil];
+        _dockProxy = [[conn rootProxy] retain];
     }
 
     _installationInProgress = YES;
@@ -183,6 +196,9 @@
     float percent = progress * 100.0;
     [_progressBar setDoubleValue:percent];
     [_progressBar setNeedsDisplay:YES];
+
+    [((id<DockService>)_dockProxy) setProgressValue:progress];
+    [((id<DockService>)_dockProxy) setProgressVisible:YES];
 
     // Data downloaded label
     NSString *dataStr = @"";
@@ -262,12 +278,14 @@
     _installationSuccessful = success;
 
     if (success) {
+        [((id<DockService>)_dockProxy) setProgressValue:1.0];
         [_statusLabel setStringValue:NSLocalizedString(@"Live medium created successfully!", @"")];
         [_progressBar setDoubleValue:100.0];
         [_progressLabel setStringValue:NSLocalizedString(@"Installation completed", @"")];
         [_controller showInstallationSuccess:NSLocalizedString(@"Live medium has been created successfully!", @"")];
         [self requestNavigationUpdate];
     } else {
+        [((id<DockService>)_dockProxy) setProgressVisible:NO];
         [_statusLabel setStringValue:NSLocalizedString(@"Installation failed", @"")];
         [_progressLabel setStringValue:error ? error : NSLocalizedString(@"Unknown error occurred", @"")];
         [_progressBar setHidden:YES];

@@ -193,6 +193,7 @@ NSString *IACheckImageSourceAvailable(void);
     BOOL _wasSuccessful;
     NSDate *_startTime;
     double _currentPercent;
+    id _dockProxy;
 }
 @property (copy, nonatomic) NSString *stepTitle;
 @property (copy, nonatomic) NSString *stepDescription;

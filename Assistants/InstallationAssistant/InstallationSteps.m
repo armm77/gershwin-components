@@ -17,6 +17,11 @@
 #include <stdio.h>
 #include <string.h>
 
+@protocol DockService
+- (void)setProgressValue:(double)value;
+- (void)setProgressVisible:(BOOL)visible;
+@end
+
 // ============================================================================
 // Helper: Detect whether the real kernel is FreeBSD (even under Linux compat)
 // ============================================================================
@@ -1002,6 +1007,8 @@ NSString *IACheckImageSourceAvailable(void)
 - (void)dealloc
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [((id<DockService>)_dockProxy) setProgressVisible:NO];
+    [_dockProxy release];
     [_etaTimer invalidate];
     [_etaTimer release];
     [_startTime release];
@@ -1063,6 +1070,12 @@ NSString *IACheckImageSourceAvailable(void)
     if (_isRunning) {
         NSDebugLLog(@"gwcomp", @"IAInstallProgressStep: already running, ignoring duplicate start");
         return;
+    }
+
+    // Connect to Dock DO service for progress bar in icon
+    if (_dockProxy == nil) {
+        NSConnection *conn = [NSConnection connectionWithRegisteredName:@"com.canonical.Unity.LauncherEntry" host:nil];
+        _dockProxy = [[conn rootProxy] retain];
     }
 
     _isRunning = YES;
@@ -1237,6 +1250,8 @@ NSString *IACheckImageSourceAvailable(void)
 
             [_detailLabel setStringValue:displayMsg];
             [_progressBar setDoubleValue:pct];
+            [((id<DockService>)_dockProxy) setProgressValue:pct / 100.0];
+            [((id<DockService>)_dockProxy) setProgressVisible:YES];
             _currentPercent = pct;
             [self _updateETA:nil];
         }
@@ -1276,8 +1291,10 @@ NSString *IACheckImageSourceAvailable(void)
     _wasSuccessful = (status == 0);
 
     if (_wasSuccessful) {
+        [((id<DockService>)_dockProxy) setProgressValue:1.0];
         [self _appendLog:@"\n--- Installation completed successfully ---\n"];
     } else {
+        [((id<DockService>)_dockProxy) setProgressVisible:NO];
         [self _appendLog:[NSString stringWithFormat:
             @"\n--- Installation FAILED (exit code %d) ---\n", status]];
         [_detailLabel setStringValue:
@@ -1300,6 +1317,7 @@ NSString *IACheckImageSourceAvailable(void)
     _isRunning = NO;
     _isFinished = YES;
     _wasSuccessful = NO;
+    [((id<DockService>)_dockProxy) setProgressVisible:NO];
     [_etaTimer invalidate];
     [_etaTimer release];
     _etaTimer = nil;
