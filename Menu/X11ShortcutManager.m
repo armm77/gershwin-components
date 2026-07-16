@@ -12,6 +12,7 @@
 #import <Foundation/Foundation.h>
 #import <X11/Xlib.h>
 #import <X11/keysym.h>
+#import <X11/XF86keysym.h>
 #import <dispatch/dispatch.h>
 #import <sys/select.h>
 #import <errno.h>
@@ -59,6 +60,9 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
     unsigned int _numlock_mask;
     unsigned int _capslock_mask;
     unsigned int _scrolllock_mask;
+    
+    // XF86 special key shortcuts (volume, brightness, etc.)
+    NSMutableDictionary *_xf86Actions;  // keysym NSNumber -> @{@"target": id, @"action": NSString}
     unsigned int _alt_mask;      // detected mask for Alt (Mod1/Mod2/..)
     unsigned int _super_mask;    // detected mask for Super/Cmd (Mod4/..)
 }
@@ -84,6 +88,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
         _menuItemToObjectPathMap = [[NSMutableDictionary alloc] init];
         _menuItemToConnectionMap = [[NSMutableDictionary alloc] init];
         _menuItemToActionNameMap = [[NSMutableDictionary alloc] init];
+        _xf86Actions = [[NSMutableDictionary alloc] init];
         
         // Initialize X11 display for shortcuts
         _display = XOpenDisplay(NULL);
@@ -419,6 +424,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
     
     @try {
         [self unregisterAllShortcuts];
+        [_xf86Actions removeAllObjects];
         
         if (_display) {
             XCloseDisplay(_display);
@@ -428,6 +434,58 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
         NSLog(@"X11ShortcutManager: Cleanup completed successfully");
     } @catch (NSException *exception) {
         NSLog(@"X11ShortcutManager: Exception during cleanup: %@", exception);
+    }
+}
+
+- (BOOL)registerXF86Key:(KeySym)keysym target:(id)target action:(SEL)action
+{
+    if (!_display || keysym == NoSymbol) {
+        return NO;
+    }
+
+    KeyCode keycode = XKeysymToKeycode(_display, keysym);
+    if (keycode == 0) {
+        NSLog(@"X11ShortcutManager: No keycode for XF86 keysym 0x%lx", (unsigned long)keysym);
+        return NO;
+    }
+
+    // Grab with AnyModifier to capture regardless of NumLock etc.
+    // The event handler filters out lock masks.
+    for (unsigned int mods = 0; mods <= 2; mods++) {
+        unsigned int mod = (mods == 0) ? AnyModifier :
+                           (mods == 1) ? 0 :
+                           _numlock_mask;
+        XGrabKey(_display, keycode, mod, DefaultRootWindow(_display), True,
+                 GrabModeAsync, GrabModeAsync);
+    }
+    XSync(_display, False);
+
+    NSNumber *ksNum = @((unsigned long)keysym);
+    NSDictionary *actionDict = @{@"target": target,
+                                 @"action": NSStringFromSelector(action)};
+    [_xf86Actions setObject:actionDict forKey:ksNum];
+
+    // Start event monitoring if this is the first XF86 key
+    if (!_eventMonitorThread) {
+        [self startX11EventMonitoring];
+    }
+
+    NSLog(@"X11ShortcutManager: Registered XF86 key 0x%lx with keycode %d", (unsigned long)keysym, keycode);
+    return YES;
+}
+
+- (void)triggerXF86Action:(NSDictionary *)action
+{
+    id target = [action objectForKey:@"target"];
+    NSString *actionName = [action objectForKey:@"action"];
+    if (target && actionName) {
+        SEL sel = NSSelectorFromString(actionName);
+        if ([target respondsToSelector:sel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [target performSelector:sel];
+#pragma clang diagnostic pop
+        }
     }
 }
 
@@ -1031,6 +1089,18 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
                                 dispatch_async(dispatch_get_main_queue(), ^{
                                     [self triggerMenuActionForKey:menuItemKey];
                                 });
+                            } else if (ks != NoSymbol && [_xf86Actions count] > 0) {
+                                // Check XF86 special keys (volume, brightness, etc.)
+                                NSNumber *ksNum = @((unsigned long)ks);
+                                NSDictionary *action = [_xf86Actions objectForKey:ksNum];
+                                if (action) {
+                                    NSLog(@"X11ShortcutManager: Found XF86 key action for keysym 0x%lx (%s)", (unsigned long)ks, ksname);
+                                    dispatch_async(dispatch_get_main_queue(), ^{
+                                        [self triggerXF86Action:action];
+                                    });
+                                } else {
+                                    NSDebugLog(@"X11ShortcutManager: No matching shortcut found for key: %@", keycodeModifierKey);
+                                }
                             } else {
                                 NSDebugLog(@"X11ShortcutManager: No matching shortcut found for key: %@", keycodeModifierKey);
                             }

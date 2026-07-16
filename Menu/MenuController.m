@@ -26,8 +26,10 @@
 #import "BrightnessKeySource.h"
 #import "SysfsBacklightBackend.h"
 #import "EvdevBrightnessKeySource.h"
+#import "SoundVolume.h"
 #import "GNUstepGUI/GSTheme.h"
 #import <X11/Xlib.h>
+#import <X11/XF86keysym.h>
 #import <X11/Xatom.h>
 #import <X11/Xutil.h>
 #import <sys/select.h>
@@ -36,7 +38,17 @@
 #endif
 #import <errno.h>
 #import <unistd.h>
+#import <poll.h>
+#import <fcntl.h>
+#ifdef __linux__
+#import <linux/input.h>
+#endif
 #import <dispatch/dispatch.h>
+
+// Shared debounce timestamp for brightness adjustments.
+// Both the evdev handler and XF86 key handler can fire for the same
+// physical keypress; we skip if either path handled within 200 ms.
+static NSTimeInterval _lastBrightnessAdjust = 0;
 
 @interface TimeMenuView : NSMenuView
 @end
@@ -64,6 +76,10 @@
 {
     id<BacklightBackend> _backlightBackend;
     id<BrightnessKeySource> _brightnessKeySource;
+    NSThread *_micMuteThread;
+    volatile BOOL _micMuteMonitorRunning;
+    int _micMuteFDs[16];
+    int _micMuteFDCount;
 }
 @end
 
@@ -613,12 +629,24 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         return;
     }
 
+    // Shared debounce: both evdev and XF86 key paths can fire for the same
+    // physical keypress.  The evdev path fires first (low-level input event),
+    // then XF86 fires later (X11 keysym).  We skip if either path handled the
+    // same event within 200 ms.
+    static dispatch_once_t debounceOnce;
+    dispatch_once(&debounceOnce, ^{ _lastBrightnessAdjust = 0; });
+    NSTimeInterval debounceInterval = 0.2;
+
     __weak id<BacklightBackend> weakBackend = _backlightBackend;
     int step = maxBrightness / 20; // 5% per step
 
     [_brightnessKeySource start:^(int delta) {
         id<BacklightBackend> backend = weakBackend;
         if (!backend) return;
+
+        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+        if (now - _lastBrightnessAdjust < debounceInterval) return;
+        _lastBrightnessAdjust = now;
 
         int cur = [backend current];
         int max = [backend maximum];
@@ -630,8 +658,163 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         [backend set:next];
     }];
 
+    // Also register XF86 brightness keys so volume-like XF86 handling works.
+    X11ShortcutManager *mgr = [X11ShortcutManager sharedManager];
+    if (mgr) {
+        [mgr registerXF86Key:XF86XK_MonBrightnessUp target:self action:@selector(_brightnessUp)];
+        [mgr registerXF86Key:XF86XK_MonBrightnessDown target:self action:@selector(_brightnessDown)];
+    }
+
     NSDebugLLog(@"gwcomp", @"MenuController: Backlight control started (max=%d, step=%d)",
           maxBrightness, step);
+}
+
+- (void)_brightnessUp
+{
+    [self _adjustBrightnessBy:1];
+}
+
+- (void)_brightnessDown
+{
+    [self _adjustBrightnessBy:-1];
+}
+
+- (void)_adjustBrightnessBy:(int)delta
+{
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (now - _lastBrightnessAdjust < 0.2) return;
+    _lastBrightnessAdjust = now;
+
+    id<BacklightBackend> backend = _backlightBackend;
+    if (!backend) return;
+
+    int cur = [backend current];
+    int max = [backend maximum];
+    int step = max / 20;
+    int next = cur + delta * step;
+
+    if (next < 0) next = 0;
+    if (next > max) next = max;
+
+    [backend set:next];
+}
+
+#pragma mark - Mic mute (evdev, to preserve hardware LED)
+
+- (void)startMicMuteMonitor
+{
+#ifdef __linux__
+    _micMuteFDCount = 0;
+    memset(_micMuteFDs, -1, sizeof(_micMuteFDs));
+
+    // Scan /proc/bus/input/devices for devices with KEY_MICMUTE
+    FILE *fp = fopen("/proc/bus/input/devices", "r");
+    if (!fp) return;
+    char line[512];
+    BOOL hasMicMute = NO;
+    int eventNum = -1;
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "N: Name=", 8) == 0) {
+            hasMicMute = NO;
+            eventNum = -1;
+        } else if (strncmp(line, "B: KEY=", 7) == 0) {
+            // Check for KEY_MICMUTE (248) in the key bitmap
+            unsigned long bits[8] = {0};
+            char *p = line + 7;
+            for (int i = 0; i < 8 && *p; i++) {
+                bits[i] = strtoul(p, &p, 16);
+            }
+            unsigned long word = bits[248 / (sizeof(long) * 8)];
+            unsigned long bit = 1UL << (248 % (sizeof(long) * 8));
+            if (word & bit) {
+                hasMicMute = YES;
+            }
+        } else if (strncmp(line, "H: Handlers=", 12) == 0) {
+            char *h = line + 12;
+            char *tok = strtok(h, " \t\n");
+            while (tok) {
+                if (strncmp(tok, "event", 5) == 0) {
+                    eventNum = atoi(tok + 5);
+                }
+                tok = strtok(NULL, " \t\n");
+            }
+        } else if (line[0] == '\n' && hasMicMute && eventNum >= 0) {
+            // Found a device with mic mute key
+            char path[64];
+            snprintf(path, sizeof(path), "/dev/input/event%d", eventNum);
+            int fd = open(path, O_RDONLY);
+            if (fd >= 0) {
+                _micMuteFDs[_micMuteFDCount++] = fd;
+            }
+            hasMicMute = NO;
+            eventNum = -1;
+            if (_micMuteFDCount >= 16) break;
+        }
+    }
+    fclose(fp);
+
+    if (_micMuteFDCount == 0) return;
+
+    _micMuteMonitorRunning = YES;
+    _micMuteThread = [[NSThread alloc] initWithTarget:self
+                                             selector:@selector(_micMuteMonitorThread)
+                                               object:nil];
+    [_micMuteThread start];
+#else
+    NSDebugLLog(@"gwcomp", @"MenuController: Mic mute evdev monitor not available on this platform");
+#endif
+}
+
+- (void)_micMuteMonitorThread
+{
+#ifdef __linux__
+    @autoreleasepool {
+        struct pollfd fds[16];
+        int nfds = 0;
+        for (int i = 0; i < _micMuteFDCount; i++) {
+            fds[nfds].fd = _micMuteFDs[i];
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+
+        while (_micMuteMonitorRunning) {
+            int ret = poll(fds, nfds, 1000);
+            if (ret < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            if (ret == 0) continue;
+
+            for (int i = 0; i < nfds; i++) {
+                if (fds[i].revents & POLLIN) {
+                    struct input_event ev;
+                    while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev)) {
+                        if (ev.type == EV_KEY && ev.code == KEY_MICMUTE && ev.value == 1) {
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                [SoundVolume toggleMicMute];
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Cleanup FDs
+        for (int i = 0; i < _micMuteFDCount; i++) {
+            if (_micMuteFDs[i] >= 0) {
+                close(_micMuteFDs[i]);
+                _micMuteFDs[i] = -1;
+            }
+        }
+    }
+#endif
+}
+
+- (void)_stopMicMuteMonitor
+{
+    _micMuteMonitorRunning = NO;
+    _micMuteThread = nil;
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification
@@ -655,6 +838,9 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     }
     _brightnessKeySource = nil;
     _backlightBackend = nil;
+
+    // Stop mic mute evdev monitor
+    [self _stopMicMuteMonitor];
 
     // Clean up global shortcuts
     NSDebugLLog(@"gwcomp", @"MenuController: Cleaning up global shortcuts...");
@@ -841,6 +1027,18 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
             NSDebugLLog(@"gwcomp", @"MenuController: Cmd-Space already taken - not registering global shortcut");
         }
     }
+
+    // Register XF86Audio volume keys for hardware volume control.
+    X11ShortcutManager *volMgr = [X11ShortcutManager sharedManager];
+    if (volMgr) {
+        [volMgr registerXF86Key:XF86XK_AudioRaiseVolume target:[SoundVolume class] action:@selector(increaseVolume)];
+        [volMgr registerXF86Key:XF86XK_AudioLowerVolume target:[SoundVolume class] action:@selector(decreaseVolume)];
+        [volMgr registerXF86Key:XF86XK_AudioMute target:[SoundVolume class] action:@selector(toggleMute)];
+        NSDebugLLog(@"gwcomp", @"MenuController: Registered XF86Audio volume keys");
+    }
+
+    // Mic mute uses evdev (not XGrabKey) so the system mic-mute LED still works.
+    [self startMicMuteMonitor];
 
     // Animate menu sliding in using NSTimer instead of dispatch_async for better GNUstep/FreeBSD compatibility
     // FIXME: GCD dispatch_async may not execute reliably with GNUstep run loop on some platforms

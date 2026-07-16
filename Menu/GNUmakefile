@@ -50,7 +50,8 @@ Menu_OBJC_FILES = \
 	StatusItems/TimeDisplay/TimeDisplayProvider.m \
 	StatusItems/SystemMonitor/SystemMonitorProvider.m \
 	SysfsBacklightBackend.m \
-	EvdevBrightnessKeySource.m
+	EvdevBrightnessKeySource.m \
+	SoundVolume.m
 
 # Header files
 Menu_HEADER_FILES = \
@@ -89,7 +90,8 @@ Menu_HEADER_FILES = \
 	BacklightBackend.h \
 	BrightnessKeySource.h \
 	SysfsBacklightBackend.h \
-	EvdevBrightnessKeySource.h
+	EvdevBrightnessKeySource.h \
+	SoundVolume.h
 
 # Resources
 Menu_RESOURCE_FILES = \

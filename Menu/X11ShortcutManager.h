@@ -119,4 +119,14 @@
  */
 - (BOOL)isShortcutAlreadyTaken:(KeyCode)keycode modifier:(unsigned int)x11_modifier;
 
+/**
+ * Register a special XF86 key (volume, brightness, etc.) without modifier.
+ * The key is grabbed with AnyModifier; lock masks are filtered at dispatch.
+ * @param keysym The X11 keysym (e.g. XF86XK_AudioRaiseVolume)
+ * @param target The target object for the action
+ * @param action The selector to call on the target
+ * @return YES on success
+ */
+- (BOOL)registerXF86Key:(KeySym)keysym target:(id)target action:(SEL)action;
+
 @end
