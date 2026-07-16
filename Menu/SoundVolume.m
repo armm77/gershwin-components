@@ -8,7 +8,9 @@
 #import <AppKit/AppKit.h>
 #import <dispatch/dispatch.h>
 #import <sys/ioctl.h>
+#ifndef __OpenBSD__
 #import <sys/soundcard.h>
+#endif
 #import <fcntl.h>
 #import <unistd.h>
 
@@ -88,6 +90,7 @@ static BOOL _detectALSA(void)
 static BOOL _detectALSA(void) { return NO; }
 #endif /* __linux__ */
 
+#ifndef __OpenBSD__
 static BOOL _detectOSS(void)
 {
     _ossMixerFd = open("/dev/mixer", O_RDWR);
@@ -104,6 +107,9 @@ static BOOL _detectOSS(void)
     }
     return YES;
 }
+#else
+static BOOL _detectOSS(void) { return NO; }
+#endif
 
 static void _ensureBackend(void)
 {
@@ -165,6 +171,7 @@ static float _parseAmixerVolume(NSString *output) { return 0.0f; }
                                          @"sget", _alsaControl]);
         if (!output) return 0.0f;
         return _parseAmixerVolume(output);
+#ifndef __OpenBSD__
     } else if (_backend == VolumeBackendOSS) {
         int vol = -1;
         if (ioctl(_ossMixerFd, MIXER_READ(SOUND_MIXER_PCM), &vol) < 0) {
@@ -176,6 +183,7 @@ static float _parseAmixerVolume(NSString *output) { return 0.0f; }
         int left = vol & 0xFF;
         int right = (vol >> 8) & 0xFF;
         return (float)((left + right) / 2) / 100.0f;
+#endif
     }
     return 0.0f;
 }
@@ -190,11 +198,13 @@ static float _parseAmixerVolume(NSString *output) { return 0.0f; }
     if (_backend == VolumeBackendALSA) {
         _runAmixer(@[@"-c", [NSString stringWithFormat:@"%d", _alsaCard],
                       @"sset", _alsaControl, [NSString stringWithFormat:@"%d%%", percent]]);
+#ifndef __OpenBSD__
     } else if (_backend == VolumeBackendOSS) {
         int packed = (percent << 8) | percent;  // same value for left and right
         if (ioctl(_ossMixerFd, MIXER_WRITE(SOUND_MIXER_PCM), &packed) < 0) {
             ioctl(_ossMixerFd, MIXER_WRITE(SOUND_MIXER_VOLUME), &packed);
         }
+#endif
     }
 }
 
@@ -223,6 +233,7 @@ static float _parseAmixerVolume(NSString *output) { return 0.0f; }
         BOOL muted = (output && [output rangeOfString:@"[off]"].location != NSNotFound);
         _runAmixer(@[@"-c", [NSString stringWithFormat:@"%d", _alsaCard],
                       @"sset", _alsaControl, muted ? @"unmute" : @"mute"]);
+#ifndef __OpenBSD__
     } else if (_backend == VolumeBackendOSS) {
         int vol = -1;
         if (ioctl(_ossMixerFd, MIXER_READ(SOUND_MIXER_PCM), &vol) < 0) {
@@ -235,6 +246,7 @@ static float _parseAmixerVolume(NSString *output) { return 0.0f; }
         if (ioctl(_ossMixerFd, MIXER_WRITE(SOUND_MIXER_PCM), &packed) < 0) {
             ioctl(_ossMixerFd, MIXER_WRITE(SOUND_MIXER_VOLUME), &packed);
         }
+#endif
     }
 }
 
@@ -259,6 +271,7 @@ static float _parseAmixerVolume(NSString *output) { return 0.0f; }
             _runAmixer(@[@"-c", [NSString stringWithFormat:@"%d", _alsaCard],
                           @"sset", foundControl, muted ? @"unmute" : @"mute"]);
         }
+#ifndef __OpenBSD__
     } else if (_backend == VolumeBackendOSS) {
         int vol = -1;
         if (ioctl(_ossMixerFd, MIXER_READ(SOUND_MIXER_MIC), &vol) < 0) return;
@@ -267,6 +280,7 @@ static float _parseAmixerVolume(NSString *output) { return 0.0f; }
         int newVol = muted ? 80 : 0;
         int packed = (newVol << 8) | newVol;
         ioctl(_ossMixerFd, MIXER_WRITE(SOUND_MIXER_MIC), &packed);
+#endif
     }
 }
 
