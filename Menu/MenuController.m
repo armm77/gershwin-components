@@ -342,6 +342,8 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     Atom skipTaskbarAtom = XInternAtom(display, "_NET_WM_STATE_SKIP_TASKBAR", False);
     Atom skipPagerAtom = XInternAtom(display, "_NET_WM_STATE_SKIP_PAGER", False);
     Atom stateAtoms[3] = {stickyAtom, skipTaskbarAtom, skipPagerAtom};
+    Atom wmTypeAtom = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
+    Atom normalAtom = XInternAtom(display, "_NET_WM_WINDOW_TYPE_NORMAL", False);
 
     Window root = DefaultRootWindow(display);
     for (NSNumber *candidate in menuBarWindows) {
@@ -380,6 +382,11 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
 
         XChangeProperty(display, menuBarWindow, stateAtom, XA_ATOM, 32,
                         PropModeReplace, (unsigned char *)stateAtoms, 3);
+
+        // Override the backend's automatic _NET_WM_WINDOW_TYPE_DOCK
+        // (set by XGServerWindow -setwindowlevel: for NSMainMenuWindowLevel).
+        XChangeProperty(display, menuBarWindow, wmTypeAtom, XA_ATOM, 32,
+                        PropModeReplace, (unsigned char *)&normalAtom, 1);
 
         NSDebugLLog(@"gwcomp", @"MenuController: Applied dock/strut properties to XID 0x%lx (root=(%d,%d) size=%ux%u top=%lu x-range=%lu..%lu)",
               (unsigned long)menuBarWindow, rootX, rootY, width, height, topStrut, startX, endX);
