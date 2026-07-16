@@ -1074,7 +1074,7 @@ NSString *IACheckImageSourceAvailable(void)
 
     // Connect to Dock DO service for progress bar in icon
     if (_dockProxy == nil) {
-        NSConnection *conn = [NSConnection connectionWithRegisteredName:@"com.canonical.Unity.LauncherEntry" host:nil];
+        NSConnection *conn = [NSConnection connectionWithRegisteredName:@"DockIcon" host:nil];
         _dockProxy = [[conn rootProxy] retain];
     }
 
