@@ -148,6 +148,10 @@ static float _parseAmixerVolume(NSString *output)
     }
     return 0.0f;
 }
+#else
+static NSString *_runAmixer(NSArray *args) { return nil; }
+static float _parseAmixerVolume(NSString *output) { return 0.0f; }
+#endif /* __linux__ */
 
 @implementation SoundVolume
 
@@ -163,12 +167,8 @@ static float _parseAmixerVolume(NSString *output)
         int vol = -1;
         if (ioctl(_ossMixerFd, MIXER_READ(SOUND_MIXER_PCM), &vol) < 0) {
             if (ioctl(_ossMixerFd, MIXER_READ(SOUND_MIXER_VOLUME), &vol) < 0) {
-    return 0.0f;
-}
-#else
-static NSString *_runAmixer(NSArray *args) { return nil; }
-static float _parseAmixerVolume(NSString *output) { return 0.0f; }
-#endif /* __linux__ */
+                return 0.0f;
+            }
         }
         // OSS returns left vol in low byte, right in high byte; average them
         int left = vol & 0xFF;
